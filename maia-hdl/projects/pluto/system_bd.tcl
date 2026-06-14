@@ -354,6 +354,16 @@ create_bd_addr_seg -range 0x20000000 -offset 0x00000000 \
                     [get_bd_addr_segs sys_ps7/S_AXI_HP1/HP1_DDR_LOWOCM] \
                     SEG_sys_ps7_HP1_DDR_LOWOCM
 
+# Airband multichannel audio DMA (HP0). The DMA runs in the maia_sdr clk
+# (sync, clk_out1 = 62.5 MHz) domain, so HP0 is clocked from clk_out1.
+ad_ip_parameter sys_ps7 CONFIG.PCW_USE_S_AXI_HP0 {1}
+ad_connect maia_sdr_clk/clk_out1 sys_ps7/S_AXI_HP0_ACLK
+ad_connect maia_sdr/m_axi_airband sys_ps7/S_AXI_HP0
+create_bd_addr_seg -range 0x20000000 -offset 0x00000000 \
+                    [get_bd_addr_spaces maia_sdr/m_axi_airband] \
+                    [get_bd_addr_segs sys_ps7/S_AXI_HP0/HP0_DDR_LOWOCM] \
+                    SEG_sys_ps7_HP0_DDR_LOWOCM
+
 
 # interrupts
 if {[info exists maia_iio]} {

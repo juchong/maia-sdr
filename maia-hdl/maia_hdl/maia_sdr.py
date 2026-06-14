@@ -7,6 +7,8 @@
 #
 
 import argparse
+import os
+import sys
 
 from amaranth import *
 from amaranth.lib.cdc import FFSynchronizer, PulseSynchronizer
@@ -18,14 +20,43 @@ from .clknx import ClkNxCommonEdge
 from .config import MaiaSDRConfig
 from . import configs
 from .ddc import DDC
+from .dma import DmaStreamWrite
 from .pulse import PulseStretcher
 from .pluto_platform import PlutoPlatform
 from .register import Access, Field, Registers, Register, RegisterMap
 from .recorder import Recorder16IQ, RecorderMode
 from .spectrometer import Spectrometer
 
+# The airband multichannel receiver DSP is vendored under maia_hdl/airband/.
+# It is imported by flat module name (the directory is placed on sys.path) so
+# the verified hdl/ sources can be dropped in unchanged.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'airband'))
+from receiver_top import ReceiverTop  # noqa: E402
+
 # IP core version
 _version = '0.6.2'
+
+# Airband receiver deployment configuration (see hdl/realtime_budget.py:
+# chans_per_lane=4, lane_decim=128, 63-tap cleanup FIR -> 6 lanes; audio_decim
+# fixed for 16 ksps voice). The cleanup-FIR coefficients are precomputed from
+# design_cic_compensation(128, 3, 63, 0.22, 0.46) and embedded so the bitstream
+# build needs no scipy.
+_AIRBAND_N_CHANNELS = 21
+_AIRBAND_CHANS_PER_LANE = 4
+_AIRBAND_LANE_DECIM = 128
+_AIRBAND_AUDIO_DECIM = 7
+_AIRBAND_CIC_STAGES = 4
+_AIRBAND_DCBLOCK_K = 10
+_AIRBAND_NCO_WIDTH = 24
+_AIRBAND_STAGES = 3
+_AIRBAND_SAMPLE_W = 24
+_AIRBAND_FIR_OUT_SHIFT = 17
+_AIRBAND_FIR_COEFFS = [
+    0, 0, 1, 2, 2, -1, -3, -1, -1, -11, -24, -10, 46, 99, 67, -60, -164, -125,
+    -3, -1, -132, -21, 655, 1400, 871, -1724, -4844, -4643, 2202, 14853, 27467,
+    32767, 27467, 14853, 2202, -4643, -4844, -1724, 871, 1400, 655, -21, -132,
+    -1, -3, -125, -164, -60, 67, 99, 46, -10, -24, -11, -1, -1, -3, -1, 2, 2, 1,
+    0, 0]
 
 
 class MaiaSDR(Elaboratable):
@@ -36,7 +67,9 @@ class MaiaSDR(Elaboratable):
     def __init__(self, config=MaiaSDRConfig()):
         config.validate()
         self.config = config
-        self.axi4_awidth = 4
+        # 5-bit register address space: control (0x0), recorder (0x10),
+        # sdr (0x20), airband (0x40).
+        self.axi4_awidth = 5
         self.s_axi_lite = ClockDomain()
         self.sampling = ClockDomain()
         # A clock domain called 'sync' is added to override the default
@@ -203,6 +236,46 @@ class MaiaSDR(Elaboratable):
                               0),
                     ]),
             }, 3)
+        # Airband multichannel receiver and its framed-audio DMA.
+        self.receiver = ReceiverTop(
+            n_channels=_AIRBAND_N_CHANNELS,
+            chans_per_lane=_AIRBAND_CHANS_PER_LANE,
+            decimation=_AIRBAND_LANE_DECIM,
+            coeffs=_AIRBAND_FIR_COEFFS,
+            out_shift=_AIRBAND_FIR_OUT_SHIFT,
+            audio_decim=_AIRBAND_AUDIO_DECIM,
+            cic_stages=_AIRBAND_CIC_STAGES,
+            dcblock_k=_AIRBAND_DCBLOCK_K,
+            in_width=12,
+            nco_width=_AIRBAND_NCO_WIDTH,
+            stages=_AIRBAND_STAGES,
+            audio_sample_w=_AIRBAND_SAMPLE_W)
+        self.airband_dma = DmaStreamWrite(
+            config.airband_address_range[0],
+            config.airband_address_range[1],
+            width=64, name='m_axi_airband')
+        self.airband_registers = Registers(
+            'airband',
+            {
+                0b00: Register('airband_control', [
+                    Field('dma_start', Access.Wpulse, 1, 0),
+                    Field('dma_stop', Access.Wpulse, 1, 0),
+                    Field('enable', Access.RW, 1, 0),
+                    Field('overflow', Access.R, 1, 0),
+                ]),
+                0b01: Register('airband_freq_addr', [
+                    Field('freq_waddr', Access.RW,
+                          len(self.receiver.freq_waddr), 0),
+                ]),
+                0b10: Register('airband_freq', [
+                    Field('freq_wren', Access.Wpulse, 1, 0),
+                    Field('freq_wdata', Access.RW, _AIRBAND_NCO_WIDTH, 0),
+                ]),
+                0b11: Register('airband_dma_next_address', [
+                    Field('next_address', Access.R, 32, 0),
+                ]),
+            },
+            2)
         metadata = {
             'vendor': 'Daniel Estevez',
             'vendorID': 'destevez.net',
@@ -217,6 +290,7 @@ class MaiaSDR(Elaboratable):
             0x0: self.control_registers,
             0x10: self.recorder_registers,
             0x20: self.sdr_registers,
+            0x40: self.airband_registers,
         }, metadata)
 
         self.iq_in_width = 12
@@ -229,6 +303,7 @@ class MaiaSDR(Elaboratable):
             self.axi4lite.axi.ports()
             + self.spectrometer.dma.axi.ports()
             + self.recorder.dma.axi.ports()
+            + self.airband_dma.axi.ports()
             + [
                 self.re_in,
                 self.im_in,
@@ -270,6 +345,11 @@ class MaiaSDR(Elaboratable):
         m.submodules.sdr_registers = self.sdr_registers
         m.submodules.sdr_registers_cdc = sdr_registers_cdc = RegisterCDC(
             's_axi_lite', 'sync', self.sdr_registers.aw)
+        m.submodules.airband_registers = self.airband_registers
+        m.submodules.airband_registers_cdc = airband_registers_cdc = \
+            RegisterCDC('s_axi_lite', 'sync', self.airband_registers.aw)
+        m.submodules.receiver = self.receiver
+        m.submodules.airband_dma = self.airband_dma
 
         m.submodules.common_edge_2x = common_edge_2x = ClkNxCommonEdge(
             'sync', 'clk2x', 2)
@@ -379,25 +459,68 @@ class MaiaSDR(Elaboratable):
             self.ddc.im_in.eq(rxiq_cdc.im_out),
         ]
 
+        # Airband multichannel receiver (sync domain). The wideband RX IQ
+        # (post-CDC, 12-bit) is fed directly; per-channel NCO words and DMA
+        # start/stop come from the airband register bank (also sync domain).
+        airband_overflow = Signal()
+        m.d.comb += [
+            self.receiver.in_valid.eq(
+                rxiq_cdc.strobe_out
+                & self.airband_registers['airband_control']['enable']),
+            self.receiver.re_in.eq(rxiq_cdc.re_out),
+            self.receiver.im_in.eq(rxiq_cdc.im_out),
+            self.receiver.freq_wren.eq(
+                self.airband_registers['airband_freq']['freq_wren']),
+            self.receiver.freq_waddr.eq(
+                self.airband_registers['airband_freq_addr']['freq_waddr']),
+            self.receiver.freq_wdata.eq(
+                self.airband_registers['airband_freq']['freq_wdata']),
+            # framed audio stream -> DMA
+            self.airband_dma.stream_data.eq(self.receiver.stream_data),
+            self.airband_dma.stream_valid.eq(self.receiver.stream_valid),
+            self.receiver.stream_ready.eq(self.airband_dma.stream_ready),
+            self.airband_dma.start.eq(
+                self.airband_registers['airband_control']['dma_start']),
+            self.airband_dma.stop.eq(
+                self.airband_registers['airband_control']['dma_stop']),
+            self.airband_registers['airband_control']['overflow'].eq(
+                airband_overflow),
+            (self.airband_registers['airband_dma_next_address']
+             ['next_address'].eq(self.airband_dma.next_address)),
+        ]
+        # Sticky overflow: latch any real-time overrun until the DMA is
+        # (re)started.
+        with m.If(self.receiver.overflow):
+            m.d.sync += airband_overflow.eq(1)
+        with m.If(self.airband_registers['airband_control']['dma_start']):
+            m.d.sync += airband_overflow.eq(0)
+
         # Registers s_axi_lite domain
         # TODO: convert all of this into a RegisterCrossbar module
         address = Signal(self.axi4_awidth, reset_less=True)
         wdata = Signal(32, reset_less=True)
-        sdr_regs_select = self.axi4lite.address[3] == 1
+        airband_regs_select = self.axi4lite.address[4] == 1
+        sdr_regs_select = (
+            ~airband_regs_select & (self.axi4lite.address[3] == 1))
         recorder_regs_select = (
-            ~sdr_regs_select & (self.axi4lite.address[2] == 1))
+            ~airband_regs_select & ~sdr_regs_select
+            & (self.axi4lite.address[2] == 1))
         control_regs_select = (
-            ~sdr_regs_select & (self.axi4lite.address[2] == 0))
+            ~airband_regs_select & ~sdr_regs_select
+            & (self.axi4lite.address[2] == 0))
         m.d.s_axi_lite += [
             self.axi4lite.rdata.eq(self.control_registers.rdata
                                    | self.recorder_registers.rdata
-                                   | sdr_registers_cdc.i_rdata),
+                                   | sdr_registers_cdc.i_rdata
+                                   | airband_registers_cdc.i_rdata),
             self.axi4lite.rdone.eq(self.control_registers.rdone
                                    | self.recorder_registers.rdone
-                                   | sdr_registers_cdc.i_rdone),
+                                   | sdr_registers_cdc.i_rdone
+                                   | airband_registers_cdc.i_rdone),
             self.axi4lite.wdone.eq(self.control_registers.wdone
                                    | self.recorder_registers.wdone
-                                   | sdr_registers_cdc.i_wdone),
+                                   | sdr_registers_cdc.i_wdone
+                                   | airband_registers_cdc.i_wdone),
             self.control_registers.ren.eq(
                 self.axi4lite.ren & control_regs_select),
             self.control_registers.wstrobe.eq(
@@ -410,6 +533,10 @@ class MaiaSDR(Elaboratable):
                 self.axi4lite.ren & sdr_regs_select),
             sdr_registers_cdc.i_wstrobe.eq(
                 Mux(sdr_regs_select, self.axi4lite.wstrobe, 0)),
+            airband_registers_cdc.i_ren.eq(
+                self.axi4lite.ren & airband_regs_select),
+            airband_registers_cdc.i_wstrobe.eq(
+                Mux(airband_regs_select, self.axi4lite.wstrobe, 0)),
             address.eq(self.axi4lite.address),
             wdata.eq(self.axi4lite.wdata),
         ]
@@ -420,6 +547,8 @@ class MaiaSDR(Elaboratable):
             self.recorder_registers.wdata.eq(wdata),
             sdr_registers_cdc.i_address.eq(address),
             sdr_registers_cdc.i_wdata.eq(wdata),
+            airband_registers_cdc.i_address.eq(address),
+            airband_registers_cdc.i_wdata.eq(wdata),
         ]
 
         # Registers sync domain
@@ -431,6 +560,13 @@ class MaiaSDR(Elaboratable):
             sdr_registers_cdc.o_rdone.eq(self.sdr_registers.rdone),
             sdr_registers_cdc.o_wdone.eq(self.sdr_registers.wdone),
             sdr_registers_cdc.o_rdata.eq(self.sdr_registers.rdata),
+            self.airband_registers.ren.eq(airband_registers_cdc.o_ren),
+            self.airband_registers.wstrobe.eq(airband_registers_cdc.o_wstrobe),
+            self.airband_registers.address.eq(airband_registers_cdc.o_address),
+            self.airband_registers.wdata.eq(airband_registers_cdc.o_wdata),
+            airband_registers_cdc.o_rdone.eq(self.airband_registers.rdone),
+            airband_registers_cdc.o_wdone.eq(self.airband_registers.wdone),
+            airband_registers_cdc.o_rdata.eq(self.airband_registers.rdata),
         ]
         # internal resets
         # We use FFSynchronizer rather than ResetSynchronizer because of
