@@ -26,6 +26,13 @@ pub struct Api {
     pub time: Time,
     /// Versions information.
     pub versions: Versions,
+    /// Whether the airband receiver is enabled and locks the AD9361 front-end.
+    ///
+    /// When `true`, the airband multichannel receiver owns the AD9361
+    /// configuration and the AD9361 settings (`/api/ad9361`) are read-only. The
+    /// web UI uses this to disable the front-end controls.
+    #[serde(default)]
+    pub airband: bool,
 }
 
 /// AD9361 JSON schema.

@@ -47,6 +47,15 @@ async fn ad9361_update(
     iio: &iio::Ad9361,
     json: &PatchAd9361,
 ) -> Result<(), JsonError> {
+    // The airband receiver owns the AD9361 front-end when enabled: the
+    // channelizer NCO words and decimation are baked for a fixed LO/Fs, so any
+    // retune would move every channel off-band. Ignore writes while locked and
+    // let the caller return the current (locked) values, making the API
+    // effectively read-only. The airband task configures the AD9361 directly on
+    // the iio device, so it is unaffected by this lock.
+    if state.airband_locked() {
+        return Ok(());
+    }
     if let Some(freq) = json.sampling_frequency {
         // here the input sample rate to the DDC does not matter, because we only
         // need its config to check the maximum input sampling frequency and the enable

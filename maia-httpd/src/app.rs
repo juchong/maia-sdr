@@ -44,6 +44,12 @@ impl App {
             geolocation: std::sync::Mutex::new(None),
             recorder,
             spectrometer_config: Default::default(),
+            // When the airband receiver is enabled it owns the AD9361 front-end
+            // (LO/Fs/bandwidth/gain): the channelizer NCO words and decimation
+            // are baked for that exact configuration, so the front-end must stay
+            // locked. This flag makes the AD9361 HTTP API read-only (see
+            // `httpd::ad9361`) so the web UI cannot retune the radio off-band.
+            airband_locked: args.airband,
         }));
         // Initialize spectrometer sample rate and mode
         state.spectrometer_config().set_samp_rate_mode(
@@ -134,6 +140,7 @@ struct State {
     geolocation: Mutex<Option<maia_json::Geolocation>>,
     recorder: RecorderState,
     spectrometer_config: SpectrometerConfig,
+    airband_locked: bool,
 }
 
 impl AppState {
@@ -168,5 +175,14 @@ impl AppState {
     /// Returns the AD9361 sampling frequency.
     pub async fn ad9361_samp_rate(&self) -> Result<f64> {
         Ok(self.ad9361().lock().await.get_sampling_frequency().await? as f64)
+    }
+
+    /// Returns whether the AD9361 front-end is locked by the airband receiver.
+    ///
+    /// When this is `true` the airband multichannel receiver owns the AD9361
+    /// configuration and the AD9361 HTTP API (`/api/ad9361`) is read-only, so
+    /// that the web UI cannot retune the front-end away from the airband band.
+    pub fn airband_locked(&self) -> bool {
+        self.0.airband_locked
     }
 }

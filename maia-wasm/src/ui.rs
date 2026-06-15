@@ -321,6 +321,10 @@ impl Ui {
         self.update_recorder_inactive_elements(&json.recorder)?;
         self.update_geolocation_elements(&json.geolocation)?;
         self.update_versions_elements(&json.versions);
+        // Lock the AD9361 front-end controls when the airband receiver owns the
+        // radio. Done after update_ad9361_inactive_elements so the RX gain stays
+        // disabled regardless of the AGC mode reported by the server.
+        self.update_airband_lock(json.airband);
 
         // This potentially takes some time to complete, since it might have to
         // do a fetch call to PATCH the server time. We do this last.
@@ -405,6 +409,24 @@ impl Ui {
             self.update_spectrometer_settings()?;
         }
         Ok(())
+    }
+
+    /// Disables (locks) or enables the AD9361 front-end controls.
+    ///
+    /// When the airband receiver is enabled it owns the AD9361 configuration, so
+    /// the RX frequency, sampling frequency, RF bandwidth, gain and AGC controls
+    /// are made read-only. The server enforces this independently (the AD9361
+    /// HTTP API is a no-op while locked); disabling here is only for UX so the
+    /// user sees the controls are locked. When unlocked, the RX gain enabled
+    /// state is left to `update_rx_gain_disabled_status` (driven by AGC mode).
+    fn update_airband_lock(&self, locked: bool) {
+        self.elements.ad9361_rx_lo_frequency.set_disabled(locked);
+        self.elements.ad9361_sampling_frequency.set_disabled(locked);
+        self.elements.ad9361_rx_rf_bandwidth.set_disabled(locked);
+        self.elements.ad9361_rx_gain_mode.set_disabled(locked);
+        if locked {
+            self.elements.ad9361_rx_gain.set_disabled(true);
+        }
     }
 
     fn update_rx_gain_disabled_status(&self, json: &maia_json::Ad9361) {

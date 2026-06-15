@@ -33,6 +33,7 @@ async fn api_json(state: &AppState) -> Result<maia_json::Api> {
         recording_metadata,
         time,
         versions,
+        airband: state.airband_locked(),
     })
 }
 
