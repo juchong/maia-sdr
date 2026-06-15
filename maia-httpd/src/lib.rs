@@ -6,6 +6,7 @@
 
 #![warn(missing_docs)]
 
+pub mod airband;
 pub mod app;
 pub mod args;
 pub mod ddc;

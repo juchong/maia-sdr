@@ -34,6 +34,17 @@ pub struct Args {
     /// option is provided.
     #[clap(long)]
     pub ca_cert: Option<PathBuf>,
+    /// Disable the airband multichannel receiver and its audio stream
+    #[clap(long)]
+    pub no_airband: bool,
+    /// Listen address for the raw framed-audio TCP stream of the airband receiver
+    #[clap(long, default_value = "0.0.0.0:30000")]
+    pub airband_listen: SocketAddr,
+    /// Path to the airband receiver JSON config (channel plan + front-end)
+    ///
+    /// If the file is absent, a built-in default channel plan is used.
+    #[clap(long, default_value = "/root/airband.json")]
+    pub airband_config: Option<PathBuf>,
 }
 
 #[cfg(feature = "uclibc")]
@@ -45,6 +56,9 @@ impl Default for Args {
             ssl_cert: None,
             ssl_key: None,
             ca_cert: None,
+            no_airband: false,
+            airband_listen: "0.0.0.0:30000".parse().unwrap(),
+            airband_config: Some("/root/airband.json".into()),
         }
     }
 }

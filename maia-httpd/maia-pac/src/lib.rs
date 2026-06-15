@@ -873,14 +873,14 @@ pub mod generic {
         }
     }
 }
-#[doc = "Maia SDR IP core"]
+#[doc = "Maia SDR IP core (platform 0)"]
 pub type MaiaSdr = crate::Periph<maia_sdr::RegisterBlock, 0>;
 impl core::fmt::Debug for MaiaSdr {
     fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         f.debug_struct("MaiaSdr").finish()
     }
 }
-#[doc = "Maia SDR IP core"]
+#[doc = "Maia SDR IP core (platform 0)"]
 pub mod maia_sdr {
     #[repr(C)]
     #[doc = "Register block"]
@@ -898,6 +898,11 @@ pub mod maia_sdr {
         ddc_decimation: DdcDecimation,
         ddc_frequency: DdcFrequency,
         ddc_control: DdcControl,
+        _reserved12: [u8; 0x08],
+        airband_control: AirbandControl,
+        airband_freq_addr: AirbandFreqAddr,
+        airband_freq: AirbandFreq,
+        airband_dma_next_address: AirbandDmaNextAddress,
     }
     impl RegisterBlock {
         #[doc = "0x00 - product_id"]
@@ -959,6 +964,26 @@ pub mod maia_sdr {
         #[inline(always)]
         pub const fn ddc_control(&self) -> &DdcControl {
             &self.ddc_control
+        }
+        #[doc = "0x40 - airband_control"]
+        #[inline(always)]
+        pub const fn airband_control(&self) -> &AirbandControl {
+            &self.airband_control
+        }
+        #[doc = "0x44 - airband_freq_addr"]
+        #[inline(always)]
+        pub const fn airband_freq_addr(&self) -> &AirbandFreqAddr {
+            &self.airband_freq_addr
+        }
+        #[doc = "0x48 - airband_freq"]
+        #[inline(always)]
+        pub const fn airband_freq(&self) -> &AirbandFreq {
+            &self.airband_freq
+        }
+        #[doc = "0x4c - airband_dma_next_address"]
+        #[inline(always)]
+        pub const fn airband_dma_next_address(&self) -> &AirbandDmaNextAddress {
+            &self.airband_dma_next_address
         }
     }
     #[doc = "product_id (r) register accessor: product_id\n\nYou can [`read`](crate::Reg::read) this register and get [`product_id::R`]. See [API](https://docs.rs/svd2rust/#read--modify--write-api).\n\nFor information about available fields see [`mod@product_id`] module"]
@@ -1592,6 +1617,176 @@ pub mod maia_sdr {
         impl crate::Writable for DdcControlSpec {
             type Safety = crate::Unsafe;
         }
+    }
+    #[doc = "airband_control (rw) register accessor: airband_control\n\nYou can [`read`](crate::Reg::read) this register and get [`airband_control::R`]. You can [`write_with_zero`](crate::Reg::write_with_zero) this register using [`airband_control::W`]. You can also [`modify`](crate::Reg::modify) this register. See [API](https://docs.rs/svd2rust/#read--modify--write-api).\n\nFor information about available fields see [`mod@airband_control`] module"]
+    #[doc(alias = "airband_control")]
+    pub type AirbandControl = crate::Reg<airband_control::AirbandControlSpec>;
+    #[doc = "airband_control"]
+    pub mod airband_control {
+        #[doc = "Register `airband_control` reader"]
+        pub type R = crate::R<AirbandControlSpec>;
+        #[doc = "Register `airband_control` writer"]
+        pub type W = crate::W<AirbandControlSpec>;
+        #[doc = "Field `dma_start` writer - dma_start"]
+        pub type DmaStartW<'a, REG> = crate::BitWriter<'a, REG>;
+        #[doc = "Field `dma_stop` writer - dma_stop"]
+        pub type DmaStopW<'a, REG> = crate::BitWriter<'a, REG>;
+        #[doc = "Field `enable` reader - enable"]
+        pub type EnableR = crate::BitReader;
+        #[doc = "Field `enable` writer - enable"]
+        pub type EnableW<'a, REG> = crate::BitWriter<'a, REG>;
+        #[doc = "Field `overflow` reader - overflow"]
+        pub type OverflowR = crate::BitReader;
+        impl R {
+            #[doc = "Bit 2 - enable"]
+            #[inline(always)]
+            pub fn enable(&self) -> EnableR {
+                EnableR::new(((self.bits >> 2) & 1) != 0)
+            }
+            #[doc = "Bit 3 - overflow"]
+            #[inline(always)]
+            pub fn overflow(&self) -> OverflowR {
+                OverflowR::new(((self.bits >> 3) & 1) != 0)
+            }
+        }
+        impl W {
+            #[doc = "Bit 0 - dma_start"]
+            #[inline(always)]
+            pub fn dma_start(&mut self) -> DmaStartW<'_, AirbandControlSpec> {
+                DmaStartW::new(self, 0)
+            }
+            #[doc = "Bit 1 - dma_stop"]
+            #[inline(always)]
+            pub fn dma_stop(&mut self) -> DmaStopW<'_, AirbandControlSpec> {
+                DmaStopW::new(self, 1)
+            }
+            #[doc = "Bit 2 - enable"]
+            #[inline(always)]
+            pub fn enable(&mut self) -> EnableW<'_, AirbandControlSpec> {
+                EnableW::new(self, 2)
+            }
+        }
+        #[doc = "airband_control\n\nYou can [`read`](crate::Reg::read) this register and get [`airband_control::R`](R). You can [`write_with_zero`](crate::Reg::write_with_zero) this register using [`airband_control::W`](W). You can also [`modify`](crate::Reg::modify) this register. See [API](https://docs.rs/svd2rust/#read--modify--write-api)."]
+        pub struct AirbandControlSpec;
+        impl crate::RegisterSpec for AirbandControlSpec {
+            type Ux = u32;
+        }
+        #[doc = "`read()` method returns [`airband_control::R`](R) reader structure"]
+        impl crate::Readable for AirbandControlSpec {}
+        #[doc = "`write(|w| ..)` method takes [`airband_control::W`](W) writer structure"]
+        impl crate::Writable for AirbandControlSpec {
+            type Safety = crate::Unsafe;
+        }
+    }
+    #[doc = "airband_freq_addr (rw) register accessor: airband_freq_addr\n\nYou can [`read`](crate::Reg::read) this register and get [`airband_freq_addr::R`]. You can [`write_with_zero`](crate::Reg::write_with_zero) this register using [`airband_freq_addr::W`]. You can also [`modify`](crate::Reg::modify) this register. See [API](https://docs.rs/svd2rust/#read--modify--write-api).\n\nFor information about available fields see [`mod@airband_freq_addr`] module"]
+    #[doc(alias = "airband_freq_addr")]
+    pub type AirbandFreqAddr = crate::Reg<airband_freq_addr::AirbandFreqAddrSpec>;
+    #[doc = "airband_freq_addr"]
+    pub mod airband_freq_addr {
+        #[doc = "Register `airband_freq_addr` reader"]
+        pub type R = crate::R<AirbandFreqAddrSpec>;
+        #[doc = "Register `airband_freq_addr` writer"]
+        pub type W = crate::W<AirbandFreqAddrSpec>;
+        #[doc = "Field `freq_waddr` reader - freq_waddr"]
+        pub type FreqWaddrR = crate::FieldReader;
+        #[doc = "Field `freq_waddr` writer - freq_waddr"]
+        pub type FreqWaddrW<'a, REG> = crate::FieldWriter<'a, REG, 5>;
+        impl R {
+            #[doc = "Bits 0:4 - freq_waddr"]
+            #[inline(always)]
+            pub fn freq_waddr(&self) -> FreqWaddrR {
+                FreqWaddrR::new((self.bits & 0x1f) as u8)
+            }
+        }
+        impl W {
+            #[doc = "Bits 0:4 - freq_waddr"]
+            #[inline(always)]
+            pub fn freq_waddr(&mut self) -> FreqWaddrW<'_, AirbandFreqAddrSpec> {
+                FreqWaddrW::new(self, 0)
+            }
+        }
+        #[doc = "airband_freq_addr\n\nYou can [`read`](crate::Reg::read) this register and get [`airband_freq_addr::R`](R). You can [`write_with_zero`](crate::Reg::write_with_zero) this register using [`airband_freq_addr::W`](W). You can also [`modify`](crate::Reg::modify) this register. See [API](https://docs.rs/svd2rust/#read--modify--write-api)."]
+        pub struct AirbandFreqAddrSpec;
+        impl crate::RegisterSpec for AirbandFreqAddrSpec {
+            type Ux = u32;
+        }
+        #[doc = "`read()` method returns [`airband_freq_addr::R`](R) reader structure"]
+        impl crate::Readable for AirbandFreqAddrSpec {}
+        #[doc = "`write(|w| ..)` method takes [`airband_freq_addr::W`](W) writer structure"]
+        impl crate::Writable for AirbandFreqAddrSpec {
+            type Safety = crate::Unsafe;
+        }
+    }
+    #[doc = "airband_freq (rw) register accessor: airband_freq\n\nYou can [`read`](crate::Reg::read) this register and get [`airband_freq::R`]. You can [`write_with_zero`](crate::Reg::write_with_zero) this register using [`airband_freq::W`]. You can also [`modify`](crate::Reg::modify) this register. See [API](https://docs.rs/svd2rust/#read--modify--write-api).\n\nFor information about available fields see [`mod@airband_freq`] module"]
+    #[doc(alias = "airband_freq")]
+    pub type AirbandFreq = crate::Reg<airband_freq::AirbandFreqSpec>;
+    #[doc = "airband_freq"]
+    pub mod airband_freq {
+        #[doc = "Register `airband_freq` reader"]
+        pub type R = crate::R<AirbandFreqSpec>;
+        #[doc = "Register `airband_freq` writer"]
+        pub type W = crate::W<AirbandFreqSpec>;
+        #[doc = "Field `freq_wren` writer - freq_wren"]
+        pub type FreqWrenW<'a, REG> = crate::BitWriter<'a, REG>;
+        #[doc = "Field `freq_wdata` reader - freq_wdata"]
+        pub type FreqWdataR = crate::FieldReader<u32>;
+        #[doc = "Field `freq_wdata` writer - freq_wdata"]
+        pub type FreqWdataW<'a, REG> = crate::FieldWriter<'a, REG, 24, u32>;
+        impl R {
+            #[doc = "Bits 1:24 - freq_wdata"]
+            #[inline(always)]
+            pub fn freq_wdata(&self) -> FreqWdataR {
+                FreqWdataR::new((self.bits >> 1) & 0x00ff_ffff)
+            }
+        }
+        impl W {
+            #[doc = "Bit 0 - freq_wren"]
+            #[inline(always)]
+            pub fn freq_wren(&mut self) -> FreqWrenW<'_, AirbandFreqSpec> {
+                FreqWrenW::new(self, 0)
+            }
+            #[doc = "Bits 1:24 - freq_wdata"]
+            #[inline(always)]
+            pub fn freq_wdata(&mut self) -> FreqWdataW<'_, AirbandFreqSpec> {
+                FreqWdataW::new(self, 1)
+            }
+        }
+        #[doc = "airband_freq\n\nYou can [`read`](crate::Reg::read) this register and get [`airband_freq::R`](R). You can [`write_with_zero`](crate::Reg::write_with_zero) this register using [`airband_freq::W`](W). You can also [`modify`](crate::Reg::modify) this register. See [API](https://docs.rs/svd2rust/#read--modify--write-api)."]
+        pub struct AirbandFreqSpec;
+        impl crate::RegisterSpec for AirbandFreqSpec {
+            type Ux = u32;
+        }
+        #[doc = "`read()` method returns [`airband_freq::R`](R) reader structure"]
+        impl crate::Readable for AirbandFreqSpec {}
+        #[doc = "`write(|w| ..)` method takes [`airband_freq::W`](W) writer structure"]
+        impl crate::Writable for AirbandFreqSpec {
+            type Safety = crate::Unsafe;
+        }
+    }
+    #[doc = "airband_dma_next_address (r) register accessor: airband_dma_next_address\n\nYou can [`read`](crate::Reg::read) this register and get [`airband_dma_next_address::R`]. See [API](https://docs.rs/svd2rust/#read--modify--write-api).\n\nFor information about available fields see [`mod@airband_dma_next_address`] module"]
+    #[doc(alias = "airband_dma_next_address")]
+    pub type AirbandDmaNextAddress =
+        crate::Reg<airband_dma_next_address::AirbandDmaNextAddressSpec>;
+    #[doc = "airband_dma_next_address"]
+    pub mod airband_dma_next_address {
+        #[doc = "Register `airband_dma_next_address` reader"]
+        pub type R = crate::R<AirbandDmaNextAddressSpec>;
+        #[doc = "Field `next_address` reader - next_address"]
+        pub type NextAddressR = crate::FieldReader<u32>;
+        impl R {
+            #[doc = "Bits 0:31 - next_address"]
+            #[inline(always)]
+            pub fn next_address(&self) -> NextAddressR {
+                NextAddressR::new(self.bits)
+            }
+        }
+        #[doc = "airband_dma_next_address\n\nYou can [`read`](crate::Reg::read) this register and get [`airband_dma_next_address::R`](R). See [API](https://docs.rs/svd2rust/#read--modify--write-api)."]
+        pub struct AirbandDmaNextAddressSpec;
+        impl crate::RegisterSpec for AirbandDmaNextAddressSpec {
+            type Ux = u32;
+        }
+        #[doc = "`read()` method returns [`airband_dma_next_address::R`](R) reader structure"]
+        impl crate::Readable for AirbandDmaNextAddressSpec {}
     }
 }
 #[unsafe(no_mangle)]

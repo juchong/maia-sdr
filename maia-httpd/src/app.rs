@@ -5,6 +5,7 @@
 //! application state.
 
 use crate::{
+    airband::Airband,
     args::Args,
     fpga::{InterruptHandler, IpCore},
     httpd::{self, RecorderFinishWaiter, RecorderState},
@@ -25,6 +26,7 @@ pub struct App {
     interrupt_handler: InterruptHandler,
     recorder_finish: RecorderFinishWaiter,
     spectrometer: Spectrometer,
+    airband: Option<Airband>,
 }
 
 impl App {
@@ -61,6 +63,8 @@ impl App {
         let recorder_finish =
             RecorderFinishWaiter::new(state.clone(), interrupt_handler.waiter_recorder());
 
+        let airband = Airband::new(state.clone(), args).await?;
+
         let httpd = httpd::Server::new(
             args.listen,
             args.listen_https,
@@ -77,6 +81,7 @@ impl App {
             interrupt_handler,
             recorder_finish,
             spectrometer,
+            airband,
         })
     }
 
@@ -85,11 +90,27 @@ impl App {
     /// This only returns if one of the objects that form the application fails.
     #[tracing::instrument(name = "App::run", level = "debug", skip_all)]
     pub async fn run(self) -> Result<()> {
+        let App {
+            httpd,
+            interrupt_handler,
+            recorder_finish,
+            spectrometer,
+            airband,
+        } = self;
+        // The airband receiver is optional; when disabled this future never
+        // resolves so it does not terminate the select.
+        let airband = async move {
+            match airband {
+                Some(a) => a.run().await,
+                None => std::future::pending::<Result<()>>().await,
+            }
+        };
         tokio::select! {
-            ret = self.httpd.run() => ret,
-            ret = self.interrupt_handler.run() => ret,
-            ret = self.recorder_finish.run() => ret,
-            ret = self.spectrometer.run() => ret,
+            ret = httpd.run() => ret,
+            ret = interrupt_handler.run() => ret,
+            ret = recorder_finish.run() => ret,
+            ret = spectrometer.run() => ret,
+            ret = airband => ret,
         }
     }
 }

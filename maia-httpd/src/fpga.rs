@@ -772,6 +772,81 @@ impl IpCore {
     pub fn recorder_next_address(&self) -> usize {
         usize::try_from(self.registers.recorder_next_address().read().bits()).unwrap()
     }
+
+    // ----- Airband multichannel receiver -----
+
+    /// Enables or disables the airband receiver datapath.
+    ///
+    /// While disabled, the receiver ignores the RX IQ input (no audio is
+    /// produced). The NCO tuning words should be programmed before enabling.
+    pub fn airband_set_enable(&self, enable: bool) {
+        self.registers
+            .airband_control()
+            .modify(|_, w| w.enable().bit(enable));
+    }
+
+    /// Returns whether the airband receiver datapath is enabled.
+    pub fn airband_enabled(&self) -> bool {
+        self.registers.airband_control().read().enable().bit()
+    }
+
+    /// Starts the airband framed-audio DMA.
+    ///
+    /// The DMA runs as a cyclic ring over the airband DDR region and only stops
+    /// on [`IpCore::airband_dma_stop`]. Starting also clears the sticky overflow
+    /// flag in hardware.
+    pub fn airband_dma_start(&self) {
+        tracing::info!("starting airband DMA");
+        self.registers
+            .airband_control()
+            .modify(|_, w| w.dma_start().set_bit());
+    }
+
+    /// Stops the airband framed-audio DMA.
+    pub fn airband_dma_stop(&self) {
+        tracing::info!("stopping airband DMA");
+        self.registers
+            .airband_control()
+            .modify(|_, w| w.dma_stop().set_bit());
+    }
+
+    /// Returns the sticky overflow flag of the airband receiver.
+    ///
+    /// It is set if any stage (channelizer lane FIFO, collector, cleanup FIR, or
+    /// the framer FIFO) dropped a sample since the last
+    /// [`IpCore::airband_dma_start`]. A drop is also observable host-side as a
+    /// per-channel sequence-counter jump.
+    pub fn airband_overflow(&self) -> bool {
+        self.registers.airband_control().read().overflow().bit()
+    }
+
+    /// Returns the next physical address that the airband DMA would write to.
+    ///
+    /// This is the ring write pointer; it wraps within the airband DDR region.
+    pub fn airband_next_address(&self) -> usize {
+        usize::try_from(
+            self.registers
+                .airband_dma_next_address()
+                .read()
+                .next_address()
+                .bits(),
+        )
+        .unwrap()
+    }
+
+    /// Programs the NCO tuning word for one airband channel.
+    ///
+    /// `word` is the phase increment
+    /// `round(f_offset / samp_rate * 2**nco_width) mod 2**nco_width`, where
+    /// `f_offset` is the channel center relative to the AD9361 RX LO.
+    pub fn airband_set_frequency(&self, channel: u8, word: u32) {
+        self.registers
+            .airband_freq_addr()
+            .modify(|_, w| unsafe { w.freq_waddr().bits(channel) });
+        self.registers
+            .airband_freq()
+            .modify(|_, w| unsafe { w.freq_wren().set_bit().freq_wdata().bits(word) });
+    }
 }
 
 macro_rules! impl_interrupt_handler {
