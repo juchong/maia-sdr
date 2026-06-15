@@ -97,13 +97,16 @@ impl App {
             spectrometer,
             airband,
         } = self;
-        // The airband receiver is optional; when disabled this future never
-        // resolves so it does not terminate the select.
+        // The airband receiver is optional and must never bring down the rest of
+        // maia-httpd: when disabled, or after it returns/errors, this future
+        // pends forever so it does not terminate the select.
         let airband = async move {
-            match airband {
-                Some(a) => a.run().await,
-                None => std::future::pending::<Result<()>>().await,
+            if let Some(a) = airband {
+                if let Err(e) = a.run().await {
+                    tracing::error!("airband receiver failed (continuing without it): {e:#}");
+                }
             }
+            std::future::pending::<Result<()>>().await
         };
         tokio::select! {
             ret = httpd.run() => ret,

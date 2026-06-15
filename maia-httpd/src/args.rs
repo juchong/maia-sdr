@@ -34,9 +34,12 @@ pub struct Args {
     /// option is provided.
     #[clap(long)]
     pub ca_cert: Option<PathBuf>,
-    /// Disable the airband multichannel receiver and its audio stream
+    /// Enable the airband multichannel receiver and its audio stream
+    ///
+    /// Disabled by default: enabling reconfigures the AD9361 front-end and starts
+    /// the cyclic audio DMA, so it must be opted into explicitly.
     #[clap(long)]
-    pub no_airband: bool,
+    pub airband: bool,
     /// Listen address for the raw framed-audio TCP stream of the airband receiver
     #[clap(long, default_value = "0.0.0.0:30000")]
     pub airband_listen: SocketAddr,
@@ -56,7 +59,7 @@ impl Default for Args {
             ssl_cert: None,
             ssl_key: None,
             ca_cert: None,
-            no_airband: false,
+            airband: false,
             airband_listen: "0.0.0.0:30000".parse().unwrap(),
             airband_config: Some("/root/airband.json".into()),
         }

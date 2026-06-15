@@ -138,10 +138,10 @@ pub struct Airband {
 
 impl Airband {
     /// Builds the airband task from the CLI arguments, or returns `None` if the
-    /// airband receiver is disabled (`--no-airband`).
+    /// airband receiver is not enabled (it is opt-in via `--airband`).
     pub async fn new(state: AppState, args: &Args) -> Result<Option<Airband>> {
-        if args.no_airband {
-            tracing::info!("airband receiver disabled (--no-airband)");
+        if !args.airband {
+            tracing::info!("airband receiver disabled (pass --airband to enable)");
             return Ok(None);
         }
         let config = AirbandConfig::load(args.airband_config.as_deref()).await?;
