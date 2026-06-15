@@ -253,7 +253,7 @@ class MaiaSDR(Elaboratable):
         self.airband_dma = DmaStreamWrite(
             config.airband_address_range[0],
             config.airband_address_range[1],
-            width=64, name='m_axi_airband')
+            width=64, cyclic=True, name='m_axi_airband')
         self.airband_registers = Registers(
             'airband',
             {

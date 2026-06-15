@@ -236,11 +236,16 @@ class DmaStreamWrite(Elaboratable):
        Stream ready. Semantics are as in AXI4-Stream.
     """
     def __init__(self, start_address, end_address, width=64, axi_awidth=32,
-                 name=None):
+                 cyclic=False, name=None):
         self.start_address = start_address
         self.end_address = end_address
         self.w = width
         self.axi_awidth = axi_awidth
+        # When cyclic is True the DMA does not stop upon reaching the end
+        # address: it wraps the write pointer back to the start address and
+        # keeps running, turning [start, end) into a hardware ring buffer.
+        # `stop` still stops it. `finished` is not pulsed in cyclic operation.
+        self.cyclic = cyclic
         self.axi = axi.AxiInterface(
             axi.AxiDevice.MANAGER,
             [axi.AxiChannel(axi.AxiDirection.WRITE, axi_awidth, width)],
@@ -352,8 +357,17 @@ class DmaStreamWrite(Elaboratable):
                     two_outstanding_bursts.eq(0),
                 ]
 
-        with m.If(self.stop | addr_counter_end):
-            m.d.sync += running.eq(0)
+        if self.cyclic:
+            # Wrap the write pointer back to the start instead of stopping when
+            # the end address is reached (one idle AW cycle per wrap, since
+            # awvalid is gated by ~addr_counter_end). Only `stop` halts it.
+            with m.If(addr_counter_end):
+                m.d.sync += axi_addr_counter.eq(axi_addr_counter_reset)
+            with m.If(self.stop):
+                m.d.sync += running.eq(0)
+        else:
+            with m.If(self.stop | addr_counter_end):
+                m.d.sync += running.eq(0)
         with m.If(self.start):
             m.d.sync += [
                 running.eq(1),
