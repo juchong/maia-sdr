@@ -40,7 +40,7 @@ import math
 import pathlib
 
 import numpy as np
-from amaranth import Array, Cat, Const, Elaboratable, Module, Signal, signed
+from amaranth import Array, Cat, Const, Elaboratable, Module, Mux, Signal, signed
 from amaranth.lib.memory import Memory
 from amaranth.sim import Simulator
 
@@ -347,32 +347,57 @@ class TdmDdcLaneBRAM(TdmDdcLane):
                      freq_wp.data.eq(self.freq_wdata),
                      freq_wp.en.eq(self.freq_wren)]
 
-        # ---- sweep control: a channel index + valid flag flow down the pipe ----
+        # ---- pipelined sweep scheduler (one channel/cycle, READ->MIX->INTEG->COMB) ----
+        # A sweep processes ONE wideband sample across all C channels. A channel's
+        # state writebacks finish 3 cycles after its READ (the COMB stage), so the
+        # SAME channel must not be re-read for >= PIPE = 4 cycles or it would read
+        # stale state (the memories have no read/write bypass). Each sweep therefore
+        # spans PERIOD = max(C, PIPE) cycles: C read cycles (one channel each) plus
+        # (PERIOD - C) idle "bubble" cycles when C < 4. With Fpl/Fs = 62.5/14 ~=
+        # 4.46 cycles per input sample, PERIOD <= 4 lets the lane accept EVERY input
+        # (no dropped samples -> correct audio rate AND correct NCO advance/tuning).
+        # Sweeps run back-to-back while in_valid holds; an idle period (active=0) is
+        # inserted only when no input is waiting.
+        #
+        # NOTE (history): the previous scheduler gated a new sweep on ``~busy`` where
+        # busy spanned the whole pipeline drain (C + 3 cycles). At the true 14 MHz
+        # cadence that exceeds 4.46 cycles/input, so the lane silently processed only
+        # every OTHER input -> half audio rate and a 2x NCO detune. This loop fixes it.
+        PIPE = 4
+        PERIOD = max(C, PIPE)
         xi = Signal(signed(self.in_width))
         xq = Signal(signed(self.in_width))
+        xi_x = Signal(signed(self.in_width))   # wideband sample aligned to MIX stage
+        xq_x = Signal(signed(self.in_width))
+        pc = Signal(range(PERIOD))             # cycle position within the sweep
+        active = Signal()                      # a sweep period is in progress
         chan_r = Signal(range(C))
-        proc_r = Signal()                    # READ stage active
-        chan_x = Signal(range(C))            # MIX stage
-        proc_x = Signal()
-        chan_g = Signal(range(C))            # INTEG stage
-        proc_g = Signal()
-        chan_c = Signal(range(C))            # COMB stage
-        proc_c = Signal()
+        proc_r = Signal()                      # READ issued this cycle
+        chan_x = Signal(range(C)); proc_x = Signal()   # MIX stage
+        chan_g = Signal(range(C)); proc_g = Signal()   # INTEG stage
+        chan_c = Signal(range(C)); proc_c = Signal()   # COMB stage
 
+        m.d.comb += [proc_r.eq(active & (pc < C)),
+                     chan_r.eq(Mux(pc < C, pc, C - 1))]
         m.d.sync += [chan_x.eq(chan_r), proc_x.eq(proc_r),
                      chan_g.eq(chan_x), proc_g.eq(proc_x),
-                     chan_c.eq(chan_g), proc_c.eq(proc_g)]
-        m.d.comb += self.busy.eq(proc_r | proc_x | proc_g | proc_c)
+                     chan_c.eq(chan_g), proc_c.eq(proc_g),
+                     xi_x.eq(xi), xq_x.eq(xq)]
+        m.d.comb += self.busy.eq(active | proc_x | proc_g | proc_c)
         m.d.sync += self.out_valid.eq(0)
 
-        with m.If(~self.busy & self.in_valid):
-            m.d.sync += [xi.eq(self.re_in), xq.eq(self.im_in),
-                         chan_r.eq(0), proc_r.eq(1)]
-        with m.Elif(proc_r):
-            with m.If(chan_r == C - 1):
-                m.d.sync += proc_r.eq(0)
+        with m.If(~active):
+            with m.If(self.in_valid):
+                m.d.sync += [xi.eq(self.re_in), xq.eq(self.im_in),
+                             pc.eq(0), active.eq(1)]
+        with m.Else():
+            with m.If(pc == PERIOD - 1):
+                with m.If(self.in_valid):    # back-to-back: latch next sample
+                    m.d.sync += [xi.eq(self.re_in), xq.eq(self.im_in), pc.eq(0)]
+                with m.Else():               # no input waiting -> go idle
+                    m.d.sync += active.eq(0)
             with m.Else():
-                m.d.sync += chan_r.eq(chan_r + 1)
+                m.d.sync += pc.eq(pc + 1)
 
         for rp in [phase_rp, freq_rp, dec_rp, *ii_rp, *iq_rp, *ci_rp, *cq_rp]:
             m.d.comb += [rp.addr.eq(chan_r), rp.en.eq(1)]
@@ -389,8 +414,8 @@ class TdmDdcLaneBRAM(TdmDdcLane):
 
         prod_i = Signal(signed(self.in_width + self.lut_width + 1))
         prod_q = Signal(signed(self.in_width + self.lut_width + 1))
-        m.d.comb += [prod_i.eq(xi * cos_v + xq * sin_v),
-                     prod_q.eq(xq * cos_v - xi * sin_v)]
+        m.d.comb += [prod_i.eq(xi_x * cos_v + xq_x * sin_v),
+                     prod_q.eq(xq_x * cos_v - xi_x * sin_v)]
 
         # registered MIX outputs + integrator state carried to INTEG
         mix_i = Signal(signed(self.mix_width))
