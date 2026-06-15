@@ -133,7 +133,9 @@ class TdmAmBackend(Elaboratable):
         re_l = Signal(signed(self.iw))
         im_l = Signal(signed(self.iw))
 
-        # all state read at the in-flight channel index
+        # all state read at the in-flight channel index (addr is constant while
+        # busy, so every read port presents mem[chan] -- the pre-write state --
+        # throughout the multi-cycle pipeline below)
         for rp in [s_rp, dec_rp, *integ_rp, *comb_rp]:
             m.d.comb += [rp.addr.eq(chan), rp.en.eq(1)]
 
@@ -148,42 +150,32 @@ class TdmAmBackend(Elaboratable):
         mag = Signal(self.mag_w)
         m.d.comb += mag.eq(mx + ((mn + (mn << 1)) >> 3))   # mx + (3*mn)>>3
 
-        # --- DC block: y = mag - (s >> k); s' = s + y ---
-        dc = Signal(signed(self.dc_w))
-        y = Signal(signed(self.dc_w))
-        m.d.comb += [dc.eq(s_rp.data >> self.k),
-                     y.eq(mag.as_signed() - dc)]
-        s_new = Signal(signed(self.s_w))
-        m.d.comb += s_new.eq(s_rp.data + y)
-
-        # --- CIC integrator cascade (input = y) ---
-        new_integ = []
-        chain = y
-        for st in range(S):
-            ni = Signal(signed(self.acc_w), name=f"ni{st}")
-            m.d.comb += ni.eq(integ_rp[st].data + chain)
-            new_integ.append(ni)
-            chain = ni
-
-        dec_d = dec_rp.data
-        dec_stb = Signal()
-        m.d.comb += dec_stb.eq(dec_d == self.decim - 1)
-
-        # registered hand-off from MAGDC stage to COMB stage
-        ni_last = Signal(signed(self.acc_w))
-        comb_d_reg = [Signal(signed(self.acc_w), name=f"comb_d{st}")
-                      for st in range(S)]
+        # Pipelined datapath: one arithmetic level per clock so the 62.5 MHz
+        # path closes (the all-combinational |.|->DC->integrator cascade was a
+        # ~22 ns / 31-CARRY4 chain). The arithmetic is identical to the original
+        # (hence bit-exact); only the latency grows -- and the AM duty cycle is
+        # ~0.15, so the extra cycles are free. Sequence per (chan, I, Q):
+        #   READ  : memory reads settle, latch magnitude
+        #   DC    : y = mag - (s>>k), s' = s+y, advance decimation counter
+        #   INTEG : S cycles, one integrator stage each (integ[st] += chain)
+        #   COMB  : on the decimation strobe, S cycles, one comb stage each
+        mag_r = Signal(self.mag_w)
+        chain = Signal(signed(self.acc_w))     # accumulates through integ/comb
         dec_stb_reg = Signal()
+        stage = Signal(range(max(2, S)))
 
-        # --- CIC comb cascade (COMB stage), fed by registered newest integrator ---
-        cchain = ni_last
-        cin_vals = []
-        for st in range(S):
-            di = Signal(signed(self.acc_w), name=f"di{st}")
-            m.d.comb += di.eq(cchain - comb_d_reg[st])
-            cin_vals.append(cchain)        # value written back to comb_delay[st]
-            cchain = di
-        comb_out = cchain
+        # stage-selected read data for the integrator / comb memories
+        integ_sel = Signal(signed(self.acc_w))
+        comb_sel = Signal(signed(self.acc_w))
+        with m.Switch(stage):
+            for st in range(S):
+                with m.Case(st):
+                    m.d.comb += [integ_sel.eq(integ_rp[st].data),
+                                 comb_sel.eq(comb_rp[st].data)]
+
+        ni = Signal(signed(self.acc_w))        # integrator stage result
+        di = Signal(signed(self.acc_w))        # comb stage result
+        m.d.comb += [ni.eq(integ_sel + chain), di.eq(chain - comb_sel)]
 
         with m.FSM():
             with m.State("IDLE"):
@@ -193,35 +185,60 @@ class TdmAmBackend(Elaboratable):
                                  im_l.eq(self.im_in), self.busy.eq(1)]
                     m.next = "READ"
             with m.State("READ"):
-                m.next = "MAGDC"            # wait one cycle for sync-read data
-            with m.State("MAGDC"):
-                # DC block + integrators write back every sample
-                m.d.comb += [s_wp.addr.eq(chan), s_wp.data.eq(s_new),
+                # sync-read data settles this cycle; latch the magnitude
+                m.d.sync += mag_r.eq(mag)
+                m.next = "DC"
+            with m.State("DC"):
+                # y = mag - (s >> k); s' = s + y  (two adds, short path)
+                dc = Signal(signed(self.dc_w))
+                y = Signal(signed(self.dc_w))
+                m.d.comb += [dc.eq(s_rp.data >> self.k),
+                             y.eq(mag_r.as_signed() - dc),
+                             s_wp.addr.eq(chan), s_wp.data.eq(s_rp.data + y),
                              s_wp.en.eq(1)]
-                for st in range(S):
-                    m.d.comb += [integ_wp[st].addr.eq(chan),
-                                 integ_wp[st].data.eq(new_integ[st]),
-                                 integ_wp[st].en.eq(1)]
-                m.d.comb += [dec_wp.addr.eq(chan), dec_wp.en.eq(1)]
-                with m.If(dec_stb):
-                    m.d.comb += dec_wp.data.eq(0)
+                dec_stb = Signal()
+                m.d.comb += [dec_stb.eq(dec_rp.data == self.decim - 1),
+                             dec_wp.addr.eq(chan), dec_wp.en.eq(1),
+                             dec_wp.data.eq(Mux(dec_stb, 0, dec_rp.data + 1))]
+                m.d.sync += [chain.eq(y), stage.eq(0), dec_stb_reg.eq(dec_stb)]
+                m.next = "INTEG"
+            with m.State("INTEG"):
+                # one integrator stage per cycle: integ[st] += chain
+                with m.Switch(stage):
+                    for st in range(S):
+                        with m.Case(st):
+                            m.d.comb += [integ_wp[st].addr.eq(chan),
+                                         integ_wp[st].data.eq(ni),
+                                         integ_wp[st].en.eq(1)]
+                m.d.sync += chain.eq(ni)       # carries into next stage / COMB
+                with m.If(stage == S - 1):
+                    m.d.sync += stage.eq(0)
+                    m.next = "COMB"
                 with m.Else():
-                    m.d.comb += dec_wp.data.eq(dec_d + 1)
-                m.d.sync += [ni_last.eq(new_integ[-1]), dec_stb_reg.eq(dec_stb)]
-                for st in range(S):
-                    m.d.sync += comb_d_reg[st].eq(comb_rp[st].data)
-                m.next = "COMB"
+                    m.d.sync += stage.eq(stage + 1)
             with m.State("COMB"):
-                # combs + output only advance on the decimation strobe
-                for st in range(S):
-                    m.d.comb += [comb_wp[st].addr.eq(chan),
-                                 comb_wp[st].data.eq(cin_vals[st]),
-                                 comb_wp[st].en.eq(dec_stb_reg)]
-                with m.If(dec_stb_reg):
-                    m.d.sync += [self.audio_out.eq(comb_out),
-                                 self.audio_chan.eq(chan), self.audio_valid.eq(1)]
-                m.d.sync += self.busy.eq(0)
-                m.next = "IDLE"
+                with m.If(~dec_stb_reg):
+                    m.d.sync += self.busy.eq(0)
+                    m.next = "IDLE"
+                with m.Else():
+                    # one comb stage per cycle: out = chain - comb[st]; the new
+                    # comb delay is the stage input (chain), which enters as the
+                    # newest integrator output
+                    with m.Switch(stage):
+                        for st in range(S):
+                            with m.Case(st):
+                                m.d.comb += [comb_wp[st].addr.eq(chan),
+                                             comb_wp[st].data.eq(chain),
+                                             comb_wp[st].en.eq(1)]
+                    m.d.sync += chain.eq(di)
+                    with m.If(stage == S - 1):
+                        m.d.sync += [self.audio_out.eq(di),
+                                     self.audio_chan.eq(chan),
+                                     self.audio_valid.eq(1),
+                                     self.busy.eq(0), stage.eq(0)]
+                        m.next = "IDLE"
+                    with m.Else():
+                        m.d.sync += stage.eq(stage + 1)
         return m
 
 
