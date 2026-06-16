@@ -607,6 +607,106 @@ pub struct Versions {
     pub maia_hdl_version: String,
 }
 
+/// Airband receiver JSON schema.
+///
+/// This JSON schema corresponds to GET requests on `/api/airband`. It contains
+/// the airband multichannel receiver channel plan and front-end configuration.
+/// Channel/front-end changes are persisted to the receiver config file and take
+/// effect after a restart (see [`PatchAirband`] and `POST /api/system/restart`).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Airband {
+    /// Whether the airband receiver is enabled (owns the AD9361 front-end).
+    pub enabled: bool,
+    /// AD9361 RX LO / capture center frequency in Hz.
+    pub center_hz: u64,
+    /// AD9361 sample rate in samples per second.
+    ///
+    /// Read-only: the channelizer decimation is baked into the bitstream for
+    /// this rate (see `samp_rate_locked`).
+    pub samp_rate: u32,
+    /// AD9361 RX RF bandwidth in Hz (defaults to `samp_rate` when `None`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rf_bandwidth: Option<u32>,
+    /// Manual RX gain in dB (used when `agc` is `Manual`).
+    pub gain_db: f64,
+    /// AGC / gain mode.
+    pub agc: AirbandAgcMode,
+    /// Channel plan: absolute channel center frequencies (+ optional labels).
+    pub channels: Vec<AirbandChannel>,
+    /// Ring poll interval in milliseconds.
+    pub poll_ms: u64,
+    /// Maximum number of channels supported by the bitstream (read-only).
+    pub max_channels: u32,
+    /// Whether `samp_rate` is fixed by the bitstream and cannot be changed (read-only).
+    pub samp_rate_locked: bool,
+    /// Whether the persisted config differs from the running config.
+    ///
+    /// When `true`, a restart (`POST /api/system/restart`) is required for the
+    /// saved configuration to take effect.
+    pub needs_restart: bool,
+}
+
+/// Airband receiver PATCH JSON schema.
+///
+/// This JSON schema corresponds to PATCH requests on `/api/airband`. Every field
+/// is optional; only the provided fields are modified. The merged configuration
+/// is validated and persisted to the receiver config file, and takes effect
+/// after a restart. `samp_rate` cannot be changed (it is fixed by the bitstream).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct PatchAirband {
+    /// AD9361 RX LO / capture center frequency in Hz.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub center_hz: Option<u64>,
+    /// AD9361 RX RF bandwidth in Hz.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rf_bandwidth: Option<u32>,
+    /// Manual RX gain in dB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gain_db: Option<f64>,
+    /// AGC / gain mode.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agc: Option<AirbandAgcMode>,
+    /// Channel plan. When present, replaces the entire channel list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channels: Option<Vec<AirbandChannel>>,
+    /// Ring poll interval in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub poll_ms: Option<u64>,
+}
+
+/// A single airband channel.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct AirbandChannel {
+    /// Channel center frequency in Hz.
+    pub freq_hz: f64,
+    /// Optional human-readable label.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Airband AGC / gain mode.
+///
+/// Serialized in `snake_case` (`"manual"`, `"slow_attack"`, ...) to match the
+/// `agc` string in the on-disk `airband.json` config and the web UI.
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum AirbandAgcMode {
+    /// Fixed manual gain.
+    Manual,
+    /// Slow attack AGC.
+    SlowAttack,
+    /// Fast attack AGC.
+    FastAttack,
+    /// Hybrid AGC.
+    Hybrid,
+}
+
+impl_str_conv!(AirbandAgcMode,
+               "manual" => Manual,
+               "slow_attack" => SlowAttack,
+               "fast_attack" => FastAttack,
+               "hybrid" => Hybrid);
+
 /// Error.
 ///
 /// This JSON schema is used to report errors to the client. It is used whenever

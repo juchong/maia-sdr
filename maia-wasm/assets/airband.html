@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1">
+    <title>Airband channel config</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/maia-icon-32x32.png">
+    <link rel="icon" type="image/png" sizes="128x128" href="/maia-icon-128x128.png">
+    <link rel="apple-touch-icon" type="image/png" sizes="180x180" href="/maia-icon-180x180.png">
+    <link rel="stylesheet" href="./airband.css">
+    <script type="module" src="./airband.js"></script>
+  </head>
+  <body>
+    <header id="topbar">
+      <h1>Airband channel config</h1>
+      <div id="status" class="status">connecting&hellip;</div>
+      <a class="link" href="/">&larr; main waterfall</a>
+    </header>
+
+    <div id="restart_banner" class="banner hidden">
+      <span id="restart_text">Saved. Restart the receiver to apply the new configuration.</span>
+      <button id="restart_btn" type="button">Restart receiver</button>
+      <button id="dismiss_banner" type="button" class="ghost">Dismiss</button>
+    </div>
+
+    <main>
+      <section id="spectrum_section">
+        <div class="canvas_stack">
+          <canvas id="spectrum" height="180"></canvas>
+          <canvas id="waterfall" height="260"></canvas>
+          <canvas id="overlay" class="overlay"></canvas>
+        </div>
+        <canvas id="minimap" height="46"></canvas>
+
+        <div id="view_controls" class="controls">
+          <label>Tune to
+            <input id="tune_input" type="text" inputmode="decimal" placeholder="MHz" size="9">
+            <span class="unit">MHz</span>
+          </label>
+          <label>Span
+            <input id="span_slider" type="range" min="0" max="1000" value="1000">
+            <span id="span_label" class="unit">full</span>
+          </label>
+          <button id="fit_band" type="button">Fit band</button>
+          <label class="checkbox"><input id="show_spurs" type="checkbox" checked> Spur / DC bands</label>
+          <span id="floor_label" class="hint"></span>
+        </div>
+      </section>
+
+      <section id="editor_section">
+        <div class="editor_head">
+          <h2>Channels <span id="slot_usage" class="badge">0 / 21</span></h2>
+          <div class="editor_actions">
+            <button id="add_channel" type="button">Add channel</button>
+            <button id="snap_peak" type="button" title="Add a channel at the strongest visible signal">Add peak</button>
+            <button id="sort_channels" type="button" class="ghost">Sort by freq</button>
+          </div>
+        </div>
+
+        <div class="table_wrap">
+          <table id="channel_table">
+            <thead>
+              <tr>
+                <th class="col-on" title="Include in saved plan">On</th>
+                <th class="col-idx">#</th>
+                <th class="col-label">Label</th>
+                <th class="col-freq">Freq (MHz)</th>
+                <th class="col-signal">Signal</th>
+                <th class="col-actions"></th>
+              </tr>
+            </thead>
+            <tbody id="channel_rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="frontend_section">
+        <h2>Front-end</h2>
+        <div class="grid">
+          <label>Center (MHz)
+            <input id="center_input" type="text" inputmode="decimal" size="10">
+          </label>
+          <label>Sample rate
+            <input id="samp_rate_input" type="text" readonly>
+            <span class="hint">locked by bitstream</span>
+          </label>
+          <label>RF bandwidth (MHz)
+            <input id="rf_bw_input" type="text" inputmode="decimal" placeholder="auto" size="8">
+          </label>
+          <label>Gain (dB)
+            <input id="gain_input" type="number" min="0" max="77" step="0.5">
+          </label>
+          <label>AGC mode
+            <select id="agc_select">
+              <option value="manual">Manual</option>
+              <option value="slow_attack">Slow attack</option>
+              <option value="fast_attack">Fast attack</option>
+              <option value="hybrid">Hybrid</option>
+            </select>
+          </label>
+          <label>Poll (ms)
+            <input id="poll_input" type="number" min="1" max="1000" step="1">
+          </label>
+        </div>
+        <p id="center_warning" class="warning hidden">
+          Changing the center frequency retunes the radio. The live waterfall above keeps showing
+          the current tuning until the receiver is restarted.
+        </p>
+      </section>
+
+      <section id="save_section">
+        <div class="save_row">
+          <button id="save_btn" type="button" class="primary">Save configuration</button>
+          <button id="reload_btn" type="button" class="ghost">Reload from device</button>
+          <span id="dirty_label" class="hint"></span>
+        </div>
+        <details class="tools">
+          <summary>Presets &amp; import / export</summary>
+          <div class="tools_body">
+            <button id="preset_default" type="button">Load default plan</button>
+            <button id="export_json" type="button">Export JSON</button>
+            <label class="filebtn">Import JSON
+              <input id="import_json" type="file" accept="application/json,.json">
+            </label>
+            <button id="set_source_ad9361" type="button" class="ghost" title="Point the waterfall at the full ADC band">Waterfall &rarr; full band</button>
+          </div>
+        </details>
+      </section>
+    </main>
+  </body>
+</html>

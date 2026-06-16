@@ -19,7 +19,7 @@
 use crate::{app::AppState, args::Args};
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, path::Path};
 use tokio::{
     io::AsyncWriteExt,
@@ -48,7 +48,7 @@ const BROADCAST_DEPTH: usize = 256;
 /// [`AirbandConfig::default`] when absent. `samp_rate` MUST match the sample
 /// rate assumed when computing the channelizer (audio rate =
 /// `samp_rate / lane_decim / audio_decim` = `samp_rate / 128 / 7`).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct AirbandConfig {
     /// AD9361 RX LO center frequency (Hz).
@@ -63,6 +63,12 @@ pub struct AirbandConfig {
     pub agc: Option<String>,
     /// Absolute channel center frequencies (Hz). At most [`N_CHANNELS`] are used.
     pub channels_hz: Vec<f64>,
+    /// Optional per-channel labels, parallel to `channels_hz`.
+    ///
+    /// Purely cosmetic (used by the web config UI); ignored by the receiver.
+    /// Absent in older config files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_labels: Option<Vec<String>>,
     /// Ring poll interval in milliseconds.
     pub poll_ms: u64,
 }
@@ -109,6 +115,7 @@ impl Default for AirbandConfig {
                 127_100_000.0,
                 128_500_000.0,
             ],
+            channel_labels: None,
             poll_ms: 20,
         }
     }
@@ -152,7 +159,13 @@ impl Airband {
             tracing::info!("airband receiver disabled (pass --airband to enable)");
             return Ok(None);
         }
-        let config = AirbandConfig::load(args.airband_config.as_deref()).await?;
+        // Reuse the config already loaded into the application state (so the
+        // running plan and the HTTP `/api/airband` view share one source of
+        // truth); fall back to a fresh load if it is somehow absent.
+        let config = match state.airband_running() {
+            Some(config) => config.clone(),
+            None => AirbandConfig::load(args.airband_config.as_deref()).await?,
+        };
         Ok(Some(Airband {
             state,
             config,

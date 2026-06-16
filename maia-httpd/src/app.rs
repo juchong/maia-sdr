@@ -5,7 +5,7 @@
 //! application state.
 
 use crate::{
-    airband::Airband,
+    airband::{Airband, AirbandConfig},
     args::Args,
     fpga::{InterruptHandler, IpCore},
     httpd::{self, RecorderFinishWaiter, RecorderState},
@@ -13,7 +13,10 @@ use crate::{
     spectrometer::{Spectrometer, SpectrometerConfig},
 };
 use anyhow::Result;
-use std::sync::{Arc, Mutex};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 use tokio::sync::broadcast;
 
 /// maia-httpd application.
@@ -38,12 +41,24 @@ impl App {
         let ip_core = std::sync::Mutex::new(ip_core);
         let ad9361 = tokio::sync::Mutex::new(Ad9361::new().await?);
         let recorder = RecorderState::new(&ad9361, &ip_core).await?;
+        // Load the airband config once at startup. It is shared between the
+        // running receiver (`Airband`) and the `/api/airband` HTTP handlers,
+        // which compare the persisted config against this snapshot to report
+        // whether a restart is needed to apply pending changes.
+        let airband_config_path = args.airband_config.clone();
+        let airband_running = if args.airband {
+            Some(AirbandConfig::load(airband_config_path.as_deref()).await?)
+        } else {
+            None
+        };
         let state = AppState(Arc::new(State {
             ad9361,
             ip_core,
             geolocation: std::sync::Mutex::new(None),
             recorder,
             spectrometer_config: Default::default(),
+            airband_running,
+            airband_config_path,
             // When the airband receiver is enabled it owns the AD9361 front-end
             // (LO/Fs/bandwidth/gain): the channelizer NCO words and decimation
             // are baked for that exact configuration, so the front-end must stay
@@ -141,6 +156,8 @@ struct State {
     recorder: RecorderState,
     spectrometer_config: SpectrometerConfig,
     airband_locked: bool,
+    airband_running: Option<AirbandConfig>,
+    airband_config_path: Option<PathBuf>,
 }
 
 impl AppState {
@@ -184,5 +201,22 @@ impl AppState {
     /// that the web UI cannot retune the front-end away from the airband band.
     pub fn airband_locked(&self) -> bool {
         self.0.airband_locked
+    }
+
+    /// Returns the airband config loaded at startup (the running plan).
+    ///
+    /// This is `None` when the airband receiver is disabled. The `/api/airband`
+    /// handlers compare the persisted config against this snapshot to report
+    /// whether a restart is needed to apply changes.
+    pub fn airband_running(&self) -> Option<&AirbandConfig> {
+        self.0.airband_running.as_ref()
+    }
+
+    /// Returns the path to the airband JSON config file, if configured.
+    ///
+    /// This is where `/api/airband` PATCH requests persist the channel plan and
+    /// front-end settings.
+    pub fn airband_config_path(&self) -> Option<&Path> {
+        self.0.airband_config_path.as_deref()
     }
 }

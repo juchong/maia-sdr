@@ -7,7 +7,7 @@ use crate::app::AppState;
 use anyhow::Result;
 use axum::{
     Router,
-    routing::{get, put},
+    routing::{get, post, put},
 };
 use axum_server::tls_rustls::RustlsConfig;
 use bytes::Bytes;
@@ -19,12 +19,14 @@ use tower_http::{
 };
 
 mod ad9361;
+mod airband;
 mod api;
 mod ddc;
 mod geolocation;
 mod iqengine;
 mod recording;
 mod spectrometer;
+mod system;
 mod time;
 mod version;
 mod websocket;
@@ -82,6 +84,10 @@ impl Server {
                 get(spectrometer::get_spectrometer).patch(spectrometer::patch_spectrometer),
             )
             .route(
+                "/api/airband",
+                get(airband::get_airband).patch(airband::patch_airband),
+            )
+            .route(
                 "/api/ddc/config",
                 get(ddc::get_ddc_config)
                     .put(ddc::put_ddc_config)
@@ -130,6 +136,7 @@ impl Server {
                 "/waterfall",
                 get(websocket::handler).with_state(waterfall_sender),
             )
+            .route("/api/system/restart", post(system::post_restart))
             .route("/zeros", get(zeros::get_zeros)); // used for benchmarking
         if let Some(ca_cert) = &ca_cert {
             // Maia SDR CA certificate
