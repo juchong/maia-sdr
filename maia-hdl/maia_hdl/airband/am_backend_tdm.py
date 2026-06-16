@@ -11,17 +11,28 @@ shared combinational logic.
 
 Datapath per presented (chan, I, Q) sample:
 
-    |I+jQ|  (alpha-max-beta-min, no DSP)
+    |I+jQ|  (CORDIC vectoring magnitude, multiplier-free, no angle ripple)
        -> DC block      (per-channel leaky-integrator high-pass; strips carrier)
        -> CIC decimate  (per-channel N-stage integrator/comb to the audio rate)
        -> audio sample for `chan` (emitted on that channel's decimation strobe)
+
+The magnitude was originally an alpha-max-beta-min approximation
+(``max + 3/8*min``). That estimator's gain ripples ~10% with the I/Q phase
+angle, and because each received carrier sits slightly off the (un-disciplined)
+Pluto LO, its baseband phasor rotates at the residual offset df -- so the ripple
+amplitude-modulates every channel, injecting spurious audio tones at 4*df and
+harmonics at ~-30 dBc (an audible buzz, channel-dependent because df differs per
+carrier). A CORDIC vectoring magnitude is exact to the iteration count (M=12 ->
+< -140 dBc, independent of datapath width), multiplier-free (adds/shifts only),
+and has a constant gain K~1.6468 that a 5/8 shift-add corrects back to ~|z| so
+audio levels are unchanged. See hdl/am_demod.py for the spur analysis.
 
 It consumes the per-channel complex baseband that `ChannelizerCore` emits (one
 strobe per channel at the channel rate) and produces per-channel audio strobes.
 Because the upstream channel rate is far below the PL clock, a simple sequential
 FSM (one channel in flight, ~4 cycles/sample) is plenty; `busy` lets the caller
 hold off (a small FIFO upstream absorbs the per-CIC-boundary burst, as in the
-core). Bit-exact to the per-channel `EnvelopeMagnitude -> DCBlock -> CICDecimator`
+core). Bit-exact to the per-channel `cordic_magnitude -> DCBlock -> CICDecimator`
 reference models.
 
 Run:  python hdl/am_backend_tdm.py
@@ -37,7 +48,6 @@ from amaranth.lib.memory import Memory
 from amaranth.sim import Simulator
 
 from am_audio import CICDecimator, DCBlock
-from am_demod import EnvelopeMagnitude
 from ddc_tune_decimate import SYNC_PERIOD
 
 OUT_DIR = pathlib.Path(__file__).parent / "out"
@@ -65,6 +75,11 @@ class TdmAmBackend(Elaboratable):
     audio_out  : out  -- signed full-CIC-gain audio (caller scales)
     """
 
+    # CORDIC vectoring iterations for the magnitude. The relative error falls
+    # ~6 dB per iteration regardless of datapath width; 12 puts the residual
+    # magnitude ripple (and thus the AM spur floor) below ~-140 dBc.
+    CORDIC_ITERS = 12
+
     def __init__(self, *, n_channels: int, in_width: int, audio_decim: int,
                  cic_stages: int = 3, dcblock_k: int = 8):
         assert n_channels >= 1 and audio_decim >= 2 and cic_stages >= 1
@@ -74,7 +89,10 @@ class TdmAmBackend(Elaboratable):
         self.stages = cic_stages
         self.k = dcblock_k
 
-        self.mag_w = in_width + 1                       # EnvelopeMagnitude.ow
+        # CORDIC magnitude internal width: |z|*K (K~1.6468) needs ~2 guard bits
+        # over the in_width; after the 5/8 scale the result is ~|z| (<= in_width+1).
+        self.cw = in_width + 3
+        self.mag_w = in_width + 1                       # scaled |I+jQ| width
         self.dc_w = self.mag_w + 1                      # signed audio width
         self.s_w = self.dc_w + self.k + 2               # DC accumulator width
         self.growth = math.ceil(cic_stages * math.log2(audio_decim))
@@ -90,9 +108,30 @@ class TdmAmBackend(Elaboratable):
         self.audio_out = Signal(signed(self.acc_w), reset_less=True)
 
     # -- bit-exact reference model -----------------------------------------
+    @classmethod
+    def cordic_magnitude(cls, re, im):
+        """Exact integer model of the CORDIC vectoring magnitude (matches HW).
+
+        Computes |re + j*im| via ``CORDIC_ITERS`` vectoring rotations on the
+        first-quadrant vector (|re|, |im|), then the 5/8 gain correction. All
+        arithmetic is integer with arithmetic right shifts, bit-identical to the
+        elaborated datapath."""
+        re = np.asarray(re, dtype=np.int64)
+        im = np.asarray(im, dtype=np.int64)
+        x = np.abs(re).astype(np.int64).copy()
+        y = np.abs(im).astype(np.int64).copy()
+        for i in range(cls.CORDIC_ITERS):
+            dx = x >> i
+            dy = y >> i               # arithmetic shift (y may be negative)
+            pos = y >= 0
+            xn = np.where(pos, x + dy, x - dy)
+            yn = np.where(pos, y - dx, y + dx)
+            x, y = xn, yn
+        return (x * 5) >> 3            # ~ (1/K) -> recover |z| scale
+
     def model(self, samples):
         """samples: list of (chan, re, im). Returns {chan: audio_array} using the
-        exact per-channel EnvelopeMagnitude -> DCBlock -> CICDecimator arithmetic."""
+        exact per-channel CORDIC |.| -> DCBlock -> CICDecimator arithmetic."""
         per = {c: ([], []) for c in range(self.n)}
         for ch, re, im in samples:
             per[ch][0].append(int(re))
@@ -102,7 +141,7 @@ class TdmAmBackend(Elaboratable):
             if not re:
                 out[c] = np.zeros(0, np.int64)
                 continue
-            mag = EnvelopeMagnitude.model(re, im)
+            mag = self.cordic_magnitude(re, im)
             y = DCBlock.model(mag, k=self.k)
             out[c] = CICDecimator.model(y, self.decim, stages=self.stages)
         return out
@@ -130,8 +169,6 @@ class TdmAmBackend(Elaboratable):
         comb_wp = [mem.write_port() for mem in comb_m]
 
         chan = Signal(range(max(2, n)))
-        re_l = Signal(signed(self.iw))
-        im_l = Signal(signed(self.iw))
 
         # all state read at the in-flight channel index (addr is constant while
         # busy, so every read port presents mem[chan] -- the pre-write state --
@@ -139,23 +176,33 @@ class TdmAmBackend(Elaboratable):
         for rp in [s_rp, dec_rp, *integ_rp, *comb_rp]:
             m.d.comb += [rp.addr.eq(chan), rp.en.eq(1)]
 
-        # --- envelope magnitude (memoryless, alpha-max-beta-min) ---
-        re_abs = Signal(self.iw)
-        im_abs = Signal(self.iw)
-        m.d.comb += [re_abs.eq(Mux(re_l[-1], -re_l, re_l)),
-                     im_abs.eq(Mux(im_l[-1], -im_l, im_l))]
-        bigger = re_abs > im_abs
-        mx = Mux(bigger, re_abs, im_abs)
-        mn = Mux(bigger, im_abs, re_abs)
+        # --- envelope magnitude: CORDIC vectoring on (|re|, |im|) ---
+        # Multiplier-free and (unlike alpha-max-beta-min) with no angle-dependent
+        # gain ripple, so it does not modulate rotating carriers into audio spurs
+        # (the buzz). One rotation per clock over CORDIC_ITERS cycles; the
+        # converged cx = K*|z| (K~1.6468) is corrected to ~|z| by a 5/8 shift-add.
+        cw = self.cw
+        cx = Signal(signed(cw))
+        cy = Signal(signed(cw))
+        ci = Signal(range(self.CORDIC_ITERS))
+        dx = Signal(signed(cw))
+        dy = Signal(signed(cw))
+        m.d.comb += [dx.eq(cx >> ci), dy.eq(cy >> ci)]   # arithmetic shifts
+        cx_n = Signal(signed(cw))
+        cy_n = Signal(signed(cw))
+        with m.If(cy >= 0):
+            m.d.comb += [cx_n.eq(cx + dy), cy_n.eq(cy - dx)]
+        with m.Else():
+            m.d.comb += [cx_n.eq(cx - dy), cy_n.eq(cy + dx)]
         mag = Signal(self.mag_w)
-        m.d.comb += mag.eq(mx + ((mn + (mn << 1)) >> 3))   # mx + (3*mn)>>3
+        m.d.comb += mag.eq((cx + (cx << 2)) >> 3)        # cx * 5/8 ~ |z|
 
         # Pipelined datapath: one arithmetic level per clock so the 62.5 MHz
-        # path closes (the all-combinational |.|->DC->integrator cascade was a
-        # ~22 ns / 31-CARRY4 chain). The arithmetic is identical to the original
-        # (hence bit-exact); only the latency grows -- and the AM duty cycle is
-        # ~0.15, so the extra cycles are free. Sequence per (chan, I, Q):
-        #   READ  : memory reads settle, latch magnitude
+        # path closes. Only the latency grows -- the AM duty cycle has ample
+        # headroom (CORDIC adds ~CORDIC_ITERS cycles; duty stays well under 1).
+        # Sequence per (chan, I, Q):
+        #   CORDIC: CORDIC_ITERS cycles, one vectoring rotation each (reads settle)
+        #   SCALE : latch magnitude = converged cx * 5/8
         #   DC    : y = mag - (s>>k), s' = s+y, advance decimation counter
         #   INTEG : S cycles, one integrator stage each (integ[st] += chain)
         #   COMB  : on the decimation strobe, S cycles, one comb stage each
@@ -181,11 +228,21 @@ class TdmAmBackend(Elaboratable):
             with m.State("IDLE"):
                 m.d.sync += self.audio_valid.eq(0)
                 with m.If(self.in_valid & ~self.busy):
-                    m.d.sync += [chan.eq(self.in_chan), re_l.eq(self.re_in),
-                                 im_l.eq(self.im_in), self.busy.eq(1)]
-                    m.next = "READ"
-            with m.State("READ"):
-                # sync-read data settles this cycle; latch the magnitude
+                    m.d.sync += [
+                        chan.eq(self.in_chan), self.busy.eq(1), ci.eq(0),
+                        cx.eq(Mux(self.re_in[-1], -self.re_in, self.re_in)),
+                        cy.eq(Mux(self.im_in[-1], -self.im_in, self.im_in)),
+                    ]
+                    m.next = "CORDIC"
+            with m.State("CORDIC"):
+                # one vectoring rotation per cycle; memory reads settle here too
+                m.d.sync += [cx.eq(cx_n), cy.eq(cy_n)]
+                with m.If(ci == self.CORDIC_ITERS - 1):
+                    m.next = "SCALE"
+                with m.Else():
+                    m.d.sync += ci.eq(ci + 1)
+            with m.State("SCALE"):
+                # converged cx -> scaled magnitude (cx * 5/8 ~ |z|)
                 m.d.sync += mag_r.eq(mag)
                 m.next = "DC"
             with m.State("DC"):
