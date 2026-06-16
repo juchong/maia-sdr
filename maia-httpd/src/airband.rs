@@ -79,10 +79,11 @@ impl Default for AirbandConfig {
             // Airband voice is weak and intermittent. The AD9361 AGC modes
             // (slow/fast/hybrid) settle to ~55 dB on the wideband power and
             // starve weak narrowband channels (measured: ch0 peak ~5x lower
-            // than fixed max gain). Default to fixed manual gain near max; the
-            // ADC does not overload at this site (peak sums scale linearly with
-            // gain). Lower `gain_db` if a strong local signal causes audible
-            // distortion across channels.
+            // than fixed max gain), so default to fixed manual gain near max.
+            // Caveat: at strong-signal sites 71 dB can clip the *wideband* ADC
+            // (~15% of samples observed); lower `gain_db` if you hear distortion,
+            // trading sensitivity. (This does not affect the RF-spur "buzz",
+            // which is independent of gain -- see firmware/diagnostics/.)
             gain_db: 71.0,
             agc: Some("manual".to_string()),
             channels_hz: vec![
