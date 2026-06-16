@@ -76,8 +76,15 @@ impl Default for AirbandConfig {
             center_hz: 123_438_000,
             samp_rate: 14_000_000,
             rf_bandwidth: None,
-            gain_db: 40.0,
-            agc: Some("slow_attack".to_string()),
+            // Airband voice is weak and intermittent. The AD9361 AGC modes
+            // (slow/fast/hybrid) settle to ~55 dB on the wideband power and
+            // starve weak narrowband channels (measured: ch0 peak ~5x lower
+            // than fixed max gain). Default to fixed manual gain near max; the
+            // ADC does not overload at this site (peak sums scale linearly with
+            // gain). Lower `gain_db` if a strong local signal causes audible
+            // distortion across channels.
+            gain_db: 71.0,
+            agc: Some("manual".to_string()),
             channels_hz: vec![
                 118_050_000.0,
                 119_200_000.0,
