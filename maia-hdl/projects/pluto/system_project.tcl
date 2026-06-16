@@ -22,9 +22,16 @@ if {[info exists ::env(GIT_HASH)] && [string trim $::env(GIT_HASH)] ne ""} {
     set git_hash [string trim $::env(GIT_HASH)]
 }
 puts "INFO: embedding fork commit 0x$git_hash into bitstream (USERID + USR_ACCESS)"
-set_property -name {STEPS.WRITE_BITSTREAM.ARGS.MORE OPTIONS} \
-    -value "-g USERID:0x$git_hash -g USR_ACCESS:0x$git_hash" \
-    -objects [get_runs impl_1]
+# Vivado 2023.2's `write_bitstream` has no `-g` option (that is legacy `bitgen`
+# syntax and errors out as "Unknown option '-g'"). Stamp the hash via the
+# BITSTREAM.CONFIG.* design properties instead, applied from a pre-write_bitstream
+# hook that runs inside the impl_1 run process with the routed design open.
+set userid_hook [file normalize "set_bitstream_userid.tcl"]
+set fh [open $userid_hook w]
+puts $fh "set_property BITSTREAM.CONFIG.USERID 0x$git_hash \[current_design\]"
+puts $fh "set_property BITSTREAM.CONFIG.USR_ACCESS 0x$git_hash \[current_design\]"
+close $fh
+set_property STEPS.WRITE_BITSTREAM.TCL.PRE $userid_hook [get_runs impl_1]
 
 set_property is_enabled false [get_files  *system_sys_ps7_0.xdc]
 adi_project_run pluto
