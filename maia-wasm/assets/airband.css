@@ -63,7 +63,12 @@ h2 { font-size: 15px; margin: 0 0 10px; }
 .canvas_stack canvas { display: block; width: 100%; background: #05070a; }
 #spectrum { border-radius: 6px 6px 0 0; }
 #waterfall { border-radius: 0 0 6px 6px; }
-.overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: auto; cursor: crosshair; }
+/* The overlay sits on top of the spectrum + waterfall, so it must be
+   transparent -- clearRect only clears canvas content, not the element's CSS
+   background, which would otherwise hide the layers beneath it. The selector is
+   `.canvas_stack canvas.overlay` (not just `.overlay`) so it out-specifies the
+   `.canvas_stack canvas` background rule above. */
+.canvas_stack canvas.overlay { position: absolute; left: 0; top: 0; width: 100%; height: 100%; background: transparent; pointer-events: auto; cursor: crosshair; }
 #minimap { width: 100%; margin-top: 8px; background: #05070a; border-radius: 6px; cursor: pointer; }
 
 .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 10px; }
@@ -81,7 +86,39 @@ input, select, button {
   border-radius: 6px;
   padding: 6px 8px;
 }
-input[readonly] { color: var(--muted); }
+/* Read-only / locked fields: muted, not editable, and marked with a lock icon
+   on the right so it is visually obvious the value cannot be changed here. */
+input[readonly] {
+  color: var(--muted);
+  background-color: #11151c;
+  border-style: dashed;
+  cursor: not-allowed;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239aa7b4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='11' width='18' height='11' rx='2'/><path d='M7 11V7a5 5 0 0 1 10 0v4'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 28px;
+}
+.field_head { display: inline-flex; align-items: center; gap: 6px; }
+.lock_badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1px 7px 1px 18px;
+  position: relative;
+}
+.lock_badge::before {
+  content: "";
+  position: absolute;
+  left: 5px; top: 50%;
+  width: 10px; height: 10px;
+  transform: translateY(-50%);
+  background: no-repeat center/contain url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%239aa7b4' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='11' width='18' height='11' rx='2'/><path d='M7 11V7a5 5 0 0 1 10 0v4'/></svg>");
+}
 input[type="range"] { padding: 0; background: transparent; }
 input[type="checkbox"] { width: auto; }
 

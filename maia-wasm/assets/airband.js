@@ -13,6 +13,19 @@ const CHAN_HALF_BW_HZ = 6e3;    // half-width used for per-channel signal power
 const SIGNAL_PRESENT_DB = 6;    // SNR above floor considered "present"
 const SIGNAL_WEAK_DB = 3;
 const SPUR_HALF_HZ = 12e3;      // drawn half-width of spur / DC avoid bands
+// Waterfall feed rate to request so the live displays (and per-channel signal
+// bars) stay responsive. The feed is shared with the main :8000 waterfall, so
+// we only ever raise it, never lower a higher manual setting.
+const WF_MIN_RATE_HZ = 20;
+
+// Manual RX gain limits accepted by the backend (0..=77 dB).
+const GAIN_MIN_DB = 0;
+const GAIN_MAX_DB = 77;
+
+// Wheel-zoom sensitivity. The zoom factor is exp(deltaY * k), so smaller k means
+// gentler zoom. deltaY is normalized for line/page wheel modes and clamped so a
+// single touchpad/touchscreen flick cannot zoom wildly.
+const ZOOM_WHEEL_K = 0.0015;
 
 // Known fixed spurs (Hz). 120.000 MHz is the 3rd harmonic of the Pluto 40 MHz
 // reference; it shows up as a steady birdie regardless of tuning/gain.
@@ -47,8 +60,15 @@ let lineDb = null;           // Float32Array(nbins), latest spectrum in dB
 let wfCanvas = null;         // offscreen full-band waterfall (nbins x WF_ROWS)
 let wfCtx = null;
 let wfRow = new ImageData(1, 1);
-let colorMin = -50, colorMax = 10;
-let noiseFloorDb = -40;
+// Color scale in dB. Seeded to the same window the main maia waterfall uses
+// (min 35 / max 85) and then auto-tracked to the measured noise floor below.
+let colorMin = 35, colorMax = 85;
+let noiseFloorDb = 45;
+
+// dB window placed around the measured floor to reproduce the main waterfall's
+// contrast: the floor sits ~64% up the scale, leaving headroom for signals.
+const WF_FLOOR_BELOW_DB = 32;  // colorMin = floor - this
+const WF_FLOOR_ABOVE_DB = 18;  // colorMax = floor + this
 
 // view (zoom) state in Hz
 const view = { centerHz: 123.438e6, spanHz: 14e6 };
@@ -129,15 +149,29 @@ function ensureBuffers(n) {
 }
 
 function percentile(arr, p) {
-  // cheap approximate percentile via a small histogram over a sane dB range
-  const lo = -120, hi = 40, bins = 160;
-  const hist = new Int32Array(bins);
+  // Cheap approximate percentile via a histogram. The range is derived from the
+  // actual data each frame so it works regardless of the absolute power scale
+  // (the /waterfall feed is linear power, so dB lands wherever the front-end
+  // gain/levels put it -- often well above 0 dB).
+  let lo = Infinity, hi = -Infinity;
   for (let i = 0; i < arr.length; i++) {
-    let b = Math.floor((arr[i] - lo) / (hi - lo) * bins);
-    if (b < 0) b = 0; else if (b >= bins) b = bins - 1;
-    hist[b]++;
+    const v = arr[i];
+    if (v <= -119) continue; // skip the zero-bin sentinel
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
   }
-  const target = arr.length * p;
+  if (!(hi > lo)) return Number.isFinite(lo) ? lo : 0;
+  const bins = 128;
+  const hist = new Int32Array(bins);
+  let cnt = 0;
+  for (let i = 0; i < arr.length; i++) {
+    const v = arr[i];
+    if (v <= -119) continue;
+    let b = Math.floor((v - lo) / (hi - lo) * bins);
+    if (b < 0) b = 0; else if (b >= bins) b = bins - 1;
+    hist[b]++; cnt++;
+  }
+  const target = cnt * p;
   let acc = 0;
   for (let b = 0; b < bins; b++) {
     acc += hist[b];
@@ -162,13 +196,16 @@ function onSpectrum(linear) {
   wfCtx.drawImage(wfCanvas, 0, 0, nbins, WF_ROWS - 1, 0, 1, nbins, WF_ROWS - 1);
   wfCtx.putImageData(wfRow, 0, 0);
 
-  // adaptive color scaling + noise floor (smoothed)
+  // Track the measured noise floor and place a fixed-width dB window around it
+  // (smoothed) so the colormap keeps the main waterfall's contrast.
   const floor = percentile(lineDb, 0.30);
-  const top = percentile(lineDb, 0.999);
   noiseFloorDb = noiseFloorDb * 0.9 + floor * 0.1;
-  colorMin = colorMin * 0.9 + (floor - 4) * 0.1;
-  colorMax = colorMax * 0.9 + (top + 6) * 0.1;
-  if (colorMax - colorMin < 12) colorMax = colorMin + 12;
+  colorMin = colorMin * 0.9 + (floor - WF_FLOOR_BELOW_DB) * 0.1;
+  colorMax = colorMax * 0.9 + (floor + WF_FLOOR_ABOVE_DB) * 0.1;
+
+  // Drive the per-channel meters off every frame (not a slow timer) so the bars
+  // track the live signal and fall as soon as a transmission ends.
+  updateSignalMeters();
 }
 
 function connectWaterfall() {
@@ -387,6 +424,13 @@ function setView(centerHz, spanHz) {
   clampView();
 }
 
+// Convert a wheel event to a gentle zoom factor (>1 zooms out, <1 zooms in).
+function wheelZoomFactor(e) {
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1; // lines/pages -> px
+  const dy = clamp(e.deltaY * unit, -50, 50);
+  return Math.exp(dy * ZOOM_WHEEL_K);
+}
+
 function zoomAt(freq, factor) {
   const newSpan = clamp(view.spanHz * factor, MIN_SPAN_HZ, radio.spanHz);
   // keep `freq` under the cursor
@@ -464,7 +508,7 @@ function setupOverlayInteraction() {
     e.preventDefault();
     const w = c.width;
     const f = xToFreq(e.offsetX * w / c.clientWidth, w);
-    zoomAt(f, e.deltaY > 0 ? 1.2 : 1 / 1.2);
+    zoomAt(f, wheelZoomFactor(e));
   }, { passive: false });
 }
 
@@ -479,7 +523,7 @@ function setupMinimapInteraction() {
   c.addEventListener("pointerup", (e) => { dragging = false; c.releasePointerCapture(e.pointerId); });
   c.addEventListener("wheel", (e) => {
     e.preventDefault();
-    zoomAt(toFreq(e), e.deltaY > 0 ? 1.2 : 1 / 1.2);
+    zoomAt(toFreq(e), wheelZoomFactor(e));
   }, { passive: false });
 }
 
@@ -652,12 +696,15 @@ function markDirty() {
 }
 
 function readFrontEndForm() {
-  const center = parseMhz(els.center_input.value);
-  if (Number.isFinite(center)) plan.centerHz = Math.round(center);
+  // Center is locked (read-only); plan.centerHz stays whatever the device
+  // reported so saved channels remain inside the capture window.
   const bw = parseMhz(els.rf_bw_input.value);
   plan.rfBandwidth = Number.isFinite(bw) ? Math.round(bw) : null;
   const g = parseFloat(els.gain_input.value);
-  if (Number.isFinite(g)) plan.gainDb = g;
+  if (Number.isFinite(g)) {
+    plan.gainDb = clamp(g, GAIN_MIN_DB, GAIN_MAX_DB);
+    if (plan.gainDb !== g) els.gain_input.value = plan.gainDb; // reflect clamp
+  }
   plan.agc = els.agc_select.value;
   const p = parseInt(els.poll_input.value, 10);
   if (Number.isFinite(p)) plan.pollMs = p;
@@ -673,14 +720,10 @@ function writeFrontEndForm() {
 }
 
 function setupFrontEndForm() {
-  for (const id of ["center_input", "rf_bw_input", "gain_input", "agc_select", "poll_input"]) {
+  // Center and sample rate are locked (read-only), so they are not wired here.
+  for (const id of ["rf_bw_input", "gain_input", "agc_select", "poll_input"]) {
     els[id].addEventListener("change", () => { readFrontEndForm(); markDirty(); });
   }
-  els.center_input.addEventListener("input", () => {
-    const c = parseMhz(els.center_input.value);
-    els.center_warning.classList.toggle("hidden",
-      !(Number.isFinite(c) && Math.round(c) !== Math.round(radio.centerHz)));
-  });
 }
 
 // ---- API -------------------------------------------------------------------
@@ -702,6 +745,14 @@ async function loadAll() {
     radio.source = spec.input;
     radio.spanHz = spec.input_sampling_frequency || radio.spanHz;
     if (spec.input === "DDC" && api.ddc) radio.centerHz += api.ddc.frequency;
+    // Bump a slow feed up to a responsive rate (best effort; shared resource).
+    if ((spec.output_sampling_frequency || 0) < WF_MIN_RATE_HZ - 0.5) {
+      fetch("/api/spectrometer", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ output_sampling_frequency: WF_MIN_RATE_HZ }),
+      }).catch(() => { /* non-fatal */ });
+    }
   } catch (_) { /* spectrometer optional */ }
 
   const ab = await getJson("/api/airband");
@@ -868,7 +919,7 @@ function cacheEls() {
     "waterfall", "overlay", "minimap", "tune_input", "span_slider", "span_label",
     "fit_band", "show_spurs", "floor_label", "slot_usage", "add_channel",
     "snap_peak", "sort_channels", "channel_rows", "center_input", "samp_rate_input",
-    "rf_bw_input", "gain_input", "agc_select", "poll_input", "center_warning",
+    "rf_bw_input", "gain_input", "agc_select", "poll_input",
     "save_btn", "reload_btn", "dirty_label", "preset_default", "export_json",
     "import_json", "set_source_ad9361",
   ]) els[id] = $(id);
@@ -908,7 +959,9 @@ async function init() {
   setupMinimapInteraction();
   connectWaterfall();
   requestAnimationFrame(render);
-  setInterval(() => { updateSignalMeters(); updateFloorLabel(); }, 250);
+  // Meters update per waterfall frame (see onSpectrum); the floor label only
+  // needs a lazy refresh.
+  setInterval(updateFloorLabel, 250);
   window.addEventListener("beforeunload", (e) => {
     if (isDirty()) { e.preventDefault(); e.returnValue = ""; }
   });

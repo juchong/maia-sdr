@@ -7,8 +7,8 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/maia-icon-32x32.png">
     <link rel="icon" type="image/png" sizes="128x128" href="/maia-icon-128x128.png">
     <link rel="apple-touch-icon" type="image/png" sizes="180x180" href="/maia-icon-180x180.png">
-    <link rel="stylesheet" href="./airband.css">
-    <script type="module" src="./airband.js"></script>
+    <link rel="stylesheet" href="./airband.css?v=4">
+    <script type="module" src="./airband.js?v=5"></script>
   </head>
   <body>
     <header id="topbar">
@@ -77,11 +77,14 @@
       <section id="frontend_section">
         <h2>Front-end</h2>
         <div class="grid">
-          <label>Center (MHz)
-            <input id="center_input" type="text" inputmode="decimal" size="10">
+          <label class="locked">
+            <span class="field_head">Center (MHz) <span class="lock_badge">locked</span></span>
+            <input id="center_input" type="text" readonly tabindex="-1">
+            <span class="hint">set by the receiver; locked so saved channels stay in range</span>
           </label>
-          <label>Sample rate
-            <input id="samp_rate_input" type="text" readonly>
+          <label class="locked">
+            <span class="field_head">Sample rate <span class="lock_badge">locked</span></span>
+            <input id="samp_rate_input" type="text" readonly tabindex="-1">
             <span class="hint">locked by bitstream</span>
           </label>
           <label>RF bandwidth (MHz)
@@ -89,6 +92,7 @@
           </label>
           <label>Gain (dB)
             <input id="gain_input" type="number" min="0" max="77" step="0.5">
+            <span class="hint">range 0&ndash;77 dB</span>
           </label>
           <label>AGC mode
             <select id="agc_select">
@@ -102,10 +106,6 @@
             <input id="poll_input" type="number" min="1" max="1000" step="1">
           </label>
         </div>
-        <p id="center_warning" class="warning hidden">
-          Changing the center frequency retunes the radio. The live waterfall above keeps showing
-          the current tuning until the receiver is restarted.
-        </p>
       </section>
 
       <section id="save_section">
