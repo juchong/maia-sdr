@@ -52,6 +52,37 @@ from ddc_tune_decimate import SYNC_PERIOD
 
 OUT_DIR = pathlib.Path(__file__).parent / "out"
 
+# Width of the carrier-level minifloat: 5-bit exponent + 3-bit mantissa.
+CARRIER_W = 8
+CARRIER_EXP_W = 5
+CARRIER_MANT_W = 3
+
+
+def encode_carrier(dc: int) -> int:
+    """Encode a (nonnegative) carrier magnitude into the 8-bit minifloat.
+
+    Layout ``[exp(5) | mant(3)]``: ``exp`` is the 1-based position of the most
+    significant set bit (0 for a zero input), ``mant`` is the three bits just
+    below it. Decoded magnitude ~= ``(8 + mant) << (exp - 4)``. Bit-identical to
+    the elaborated encoder."""
+    v = max(0, int(dc))
+    if v == 0:
+        return 0
+    msb = v.bit_length()                       # 1..
+    exp = min(2 ** CARRIER_EXP_W - 1, msb)
+    sh = msb - (CARRIER_MANT_W + 1) if msb >= CARRIER_MANT_W + 1 else 0
+    mant = (v >> sh) & (2 ** CARRIER_MANT_W - 1)
+    return (exp << CARRIER_MANT_W) | mant
+
+
+def decode_carrier(byte: int) -> float:
+    """Inverse of :func:`encode_carrier` (approximate magnitude); host reference."""
+    exp = (byte >> CARRIER_MANT_W) & (2 ** CARRIER_EXP_W - 1)
+    mant = byte & (2 ** CARRIER_MANT_W - 1)
+    if exp == 0:
+        return 0.0
+    return float(2 ** CARRIER_MANT_W + mant) * 2.0 ** (exp - (CARRIER_MANT_W + 1))
+
 
 class TdmAmBackend(Elaboratable):
     """Folded AM back-end: |.| -> DC block -> CIC decimate, shared over N channels.
@@ -106,6 +137,10 @@ class TdmAmBackend(Elaboratable):
         self.audio_valid = Signal()
         self.audio_chan = Signal(range(max(2, n_channels)))
         self.audio_out = Signal(signed(self.acc_w), reset_less=True)
+        # Per-channel AM carrier level (the DC-block estimate = running mean of the
+        # envelope magnitude), encoded as an 8-bit minifloat [exp(5) | mant(3)] for
+        # a host-side carrier-power squelch. Emitted alongside each audio sample.
+        self.carrier_out = Signal(CARRIER_W, reset_less=True)
 
     # -- bit-exact reference model -----------------------------------------
     @classmethod
@@ -224,6 +259,30 @@ class TdmAmBackend(Elaboratable):
         di = Signal(signed(self.acc_w))        # comb stage result
         m.d.comb += [ni.eq(integ_sel + chain), di.eq(chain - comb_sel)]
 
+        # --- carrier-level minifloat encoder ---
+        # car_lat holds this channel's DC-block estimate (= mean envelope
+        # magnitude = carrier amplitude), latched in DC and held through INTEG/COMB
+        # so it is still valid when the audio sample is emitted. Encode to
+        # [exp(5)|mant(3)] via a priority encoder (highest set bit) + 3 bits below
+        # it. Runs at the slow folded AM rate, well off the CORDIC critical path.
+        car_lat = Signal(self.dc_w)
+        car_msb = Signal(range(self.dc_w + 1))
+        for i in range(self.dc_w):
+            with m.If(car_lat[i]):
+                m.d.comb += car_msb.eq(i + 1)
+        car_sh = Signal(range(self.dc_w + 1))
+        m.d.comb += car_sh.eq(Mux(car_msb >= CARRIER_MANT_W + 1,
+                                  car_msb - (CARRIER_MANT_W + 1), 0))
+        car_mant = Signal(CARRIER_MANT_W)
+        car_exp = Signal(CARRIER_EXP_W)
+        m.d.comb += [
+            car_mant.eq((car_lat >> car_sh)[:CARRIER_MANT_W]),
+            car_exp.eq(Mux(car_msb > (2 ** CARRIER_EXP_W - 1),
+                           2 ** CARRIER_EXP_W - 1, car_msb)),
+        ]
+        carrier_byte = Signal(CARRIER_W)
+        m.d.comb += carrier_byte.eq(Cat(car_mant, car_exp))
+
         with m.FSM():
             with m.State("IDLE"):
                 m.d.sync += self.audio_valid.eq(0)
@@ -257,7 +316,9 @@ class TdmAmBackend(Elaboratable):
                 m.d.comb += [dec_stb.eq(dec_rp.data == self.decim - 1),
                              dec_wp.addr.eq(chan), dec_wp.en.eq(1),
                              dec_wp.data.eq(Mux(dec_stb, 0, dec_rp.data + 1))]
-                m.d.sync += [chain.eq(y), stage.eq(0), dec_stb_reg.eq(dec_stb)]
+                # latch the carrier estimate (clamp the transient negative case)
+                m.d.sync += [chain.eq(y), stage.eq(0), dec_stb_reg.eq(dec_stb),
+                             car_lat.eq(Mux(dc[-1], 0, dc))]
                 m.next = "INTEG"
             with m.State("INTEG"):
                 # one integrator stage per cycle: integ[st] += chain
@@ -291,6 +352,7 @@ class TdmAmBackend(Elaboratable):
                     with m.If(stage == S - 1):
                         m.d.sync += [self.audio_out.eq(di),
                                      self.audio_chan.eq(chan),
+                                     self.carrier_out.eq(carrier_byte),
                                      self.audio_valid.eq(1),
                                      self.busy.eq(0), stage.eq(0)]
                         m.next = "IDLE"
@@ -305,6 +367,7 @@ class TdmAmBackend(Elaboratable):
 
 def _run(dut: TdmAmBackend, samples):
     out = {c: [] for c in range(dut.n)}
+    car = {c: [] for c in range(dut.n)}
 
     async def bench(ctx):
         for ch, re, im in samples:
@@ -316,7 +379,9 @@ def _run(dut: TdmAmBackend, samples):
             ctx.set(dut.in_valid, 0)
             while True:                       # one channel in flight: wait for done
                 if ctx.get(dut.audio_valid):
-                    out[ctx.get(dut.audio_chan)].append(ctx.get(dut.audio_out))
+                    ac = ctx.get(dut.audio_chan)
+                    out[ac].append(ctx.get(dut.audio_out))
+                    car[ac].append(ctx.get(dut.carrier_out))
                 if not ctx.get(dut.busy):
                     break
                 await ctx.tick()
@@ -325,7 +390,9 @@ def _run(dut: TdmAmBackend, samples):
     sim.add_clock(SYNC_PERIOD)
     sim.add_testbench(bench)
     sim.run()
-    return {c: np.array(v, np.int64) for c, v in out.items()}
+    audio = {c: np.array(v, np.int64) for c, v in out.items()}
+    carrier = {c: np.array(v, np.int64) for c, v in car.items()}
+    return audio, carrier
 
 
 def _verify_bitexact():
@@ -342,7 +409,7 @@ def _verify_bitexact():
     im = np.round(amp * np.sin(ph)).astype(np.int64)
     samples = list(zip(chans.tolist(), re.tolist(), im.tolist()))
 
-    hw = _run(dut, samples)
+    hw, _ = _run(dut, samples)
     ref = dut.model(samples)
     nout = 0
     for c in range(dut.n):
@@ -351,6 +418,39 @@ def _verify_bitexact():
         np.testing.assert_array_equal(g[:kk], e[:kk])
         nout = max(nout, kk)
     return dut.n, dut.acc_w, nout
+
+
+def _verify_carrier():
+    """The carrier byte tracks the AM carrier amplitude (monotonic, decodable)."""
+    # Encoder model sanity: monotonic and ordered.
+    vals = [0, 1, 7, 8, 15, 100, 1000, 1 << 15, 1 << 19]
+    dec = [decode_carrier(encode_carrier(v)) for v in vals]
+    assert dec[0] == 0.0
+    for a, b in zip(dec, dec[1:]):
+        assert b >= a, f"carrier decode not monotonic: {dec}"
+    # within ~12% of the true value (3-bit mantissa) for non-tiny inputs
+    for v in vals[3:]:
+        d = decode_carrier(encode_carrier(v))
+        assert abs(d - v) / v < 0.13, f"carrier {v} -> {d} (>13% off)"
+
+    # End-to-end: two constant-amplitude carriers on one channel -> the emitted
+    # carrier byte must decode to a larger value for the louder carrier.
+    dut = TdmAmBackend(n_channels=2, in_width=16, audio_decim=8, cic_stages=3,
+                       dcblock_k=6)
+    lim = 2 ** (dut.iw - 1) - 1
+
+    def carrier_for(amp):
+        ph = 0.7
+        re = int(round(amp * np.cos(ph)))
+        im = int(round(amp * np.sin(ph)))
+        samples = [(0, re, im)] * 2000           # settle the DC running mean
+        _, car = _run(dut, samples)
+        return decode_carrier(int(car[0][-1]))
+
+    lo = carrier_for(lim // 8)
+    hi = carrier_for(lim // 2)
+    assert hi > lo > 0, f"carrier should rise with amplitude (lo={lo}, hi={hi})"
+    return lo, hi
 
 
 def _demo_am():
@@ -368,7 +468,7 @@ def _demo_am():
     im = np.round(env * np.sin(phase)).astype(np.int64)
     samples = [(0, int(re[i]), int(im[i])) for i in range(nper)]   # only ch0 active
 
-    hw = _run(dut, samples)
+    hw, _ = _run(dut, samples)
     a = hw[0].astype(float)
     a = a[len(a) // 4:]
     a = a - np.mean(a)
@@ -389,8 +489,12 @@ def main():
     print(f"\n[AM recovery] ch0 AM tone -> audio peak {peak:.4f} cyc/sample "
           f"(expected {expected:.4f}; {na} audio samples)")
     assert abs(peak - expected) < 0.01, "did not recover the AM audio tone"
+
+    lo, hi = _verify_carrier()
+    print(f"\n[carrier] minifloat carrier byte tracks amplitude "
+          f"(decoded lo={lo:.0f} < hi={hi:.0f}): PASS")
     print("\nPASS: one folded datapath AM-demodulates N channels to audio "
-          "(bit-exact), and recovers a real AM tone.")
+          "(bit-exact), recovers a real AM tone, and emits a carrier level.")
 
 
 if __name__ == "__main__":

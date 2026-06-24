@@ -215,6 +215,7 @@ class ReceiverTop(Elaboratable):
             framer.in_valid.eq(am.audio_valid),
             framer.in_chan.eq(am.audio_chan),
             framer.in_sample.eq(am.audio_out >> self.audio_shift),
+            framer.in_carrier.eq(am.carrier_out),
         ]
         return m
 
@@ -295,7 +296,7 @@ def _verify():
     per = {c: [] for c in range(dut.n_channels)}
     last_seq = {}
     for w in words:
-        seq, chan, sample = AudioFramer.unpack(w)
+        seq, chan, sample, _carrier = AudioFramer.unpack(w)
         assert chan < dut.n_channels, f"bad channel {chan}"
         if chan in last_seq:
             assert seq == last_seq[chan] + 1, f"ch{chan} seq gap {last_seq[chan]}->{seq}"
