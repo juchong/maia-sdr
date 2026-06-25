@@ -85,14 +85,19 @@ impl Default for AirbandConfig {
             // Airband voice is weak and intermittent, so use fixed manual gain
             // (the AD9361 AGC modes settle on wideband power and starve weak
             // narrowband channels: ch0 peak ~5x lower than fixed max). Default
-            // 48 dB: the bare-front-end clipping knee (floor_sweep.py -- 71 dB
-            // clips ~15% of the wideband ADC -> broadband intermod) that ALSO
-            // lowers the prominence of the conducted on-board spur comb, which
-            // IS amplified by RX gain (term_tests.py). Raise toward the 71-73 dB
-            // ceiling only behind an external selective filter at a quiet site;
-            // lower further (~40) to suppress the comb more, trading weak-signal
-            // sensitivity. See firmware/diagnostics/.
-            gain_db: 48.0,
+            // 0 dB: the AD9361's own internal gain stage is the dominant
+            // generator of the conducted spur comb AND broadband noise/intermod
+            // -- both grow with internal gain, collapsing SFDR (measured: comb
+            // teeth and broadband hash rise faster than the wanted signal). The
+            // correct front-end architecture is a clean low-NF EXTERNAL LNA
+            // doing the gain ahead of the Pluto, with the internal gain at its
+            // floor; an A/B (external LNA vs internal gain) showed the external
+            // LNA is markedly cleaner (lower floor, fewer broadband peaks,
+            // better-behaved front end). This default therefore ASSUMES an
+            // external LNA -- on a bare front end (no LNA) 0 dB is very
+            // insensitive; raise gain_db (via /root/airband.json) for that case.
+            // See firmware/diagnostics/ and SPUR-INVESTIGATION.md.
+            gain_db: 0.0,
             agc: Some("manual".to_string()),
             channels_hz: vec![
                 118_050_000.0,
