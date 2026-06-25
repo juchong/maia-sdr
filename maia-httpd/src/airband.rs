@@ -82,15 +82,17 @@ impl Default for AirbandConfig {
             center_hz: 123_438_000,
             samp_rate: 14_000_000,
             rf_bandwidth: None,
-            // Airband voice is weak and intermittent. The AD9361 AGC modes
-            // (slow/fast/hybrid) settle to ~55 dB on the wideband power and
-            // starve weak narrowband channels (measured: ch0 peak ~5x lower
-            // than fixed max gain), so default to fixed manual gain near max.
-            // Caveat: at strong-signal sites 71 dB can clip the *wideband* ADC
-            // (~15% of samples observed); lower `gain_db` if you hear distortion,
-            // trading sensitivity. (This does not affect the RF-spur "buzz",
-            // which is independent of gain -- see firmware/diagnostics/.)
-            gain_db: 71.0,
+            // Airband voice is weak and intermittent, so use fixed manual gain
+            // (the AD9361 AGC modes settle on wideband power and starve weak
+            // narrowband channels: ch0 peak ~5x lower than fixed max). Default
+            // 48 dB: the bare-front-end clipping knee (floor_sweep.py -- 71 dB
+            // clips ~15% of the wideband ADC -> broadband intermod) that ALSO
+            // lowers the prominence of the conducted on-board spur comb, which
+            // IS amplified by RX gain (term_tests.py). Raise toward the 71-73 dB
+            // ceiling only behind an external selective filter at a quiet site;
+            // lower further (~40) to suppress the comb more, trading weak-signal
+            // sensitivity. See firmware/diagnostics/.
+            gain_db: 48.0,
             agc: Some("manual".to_string()),
             channels_hz: vec![
                 118_050_000.0,
