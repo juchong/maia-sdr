@@ -85,19 +85,23 @@ impl Default for AirbandConfig {
             // Airband voice is weak and intermittent, so use fixed manual gain
             // (the AD9361 AGC modes settle on wideband power and starve weak
             // narrowband channels: ch0 peak ~5x lower than fixed max). Default
-            // 0 dB: the AD9361's own internal gain stage is the dominant
-            // generator of the conducted spur comb AND broadband noise/intermod
-            // -- both grow with internal gain, collapsing SFDR (measured: comb
-            // teeth and broadband hash rise faster than the wanted signal). The
-            // correct front-end architecture is a clean low-NF EXTERNAL LNA
-            // doing the gain ahead of the Pluto, with the internal gain at its
-            // floor; an A/B (external LNA vs internal gain) showed the external
-            // LNA is markedly cleaner (lower floor, fewer broadband peaks,
-            // better-behaved front end). This default therefore ASSUMES an
-            // external LNA -- on a bare front end (no LNA) 0 dB is very
-            // insensitive; raise gain_db (via /root/airband.json) for that case.
+            // 12 dB, tuned for an external LNA ahead of the Pluto. The receiver
+            // is INTERNAL-noise-limited, not antenna/thermal-limited: the ch11
+            // audio floor is identical with the antenna or a 50 ohm load (within
+            // 0.4 dB), and rises only ~1 dB per +6 dB of gain -- so the floor is
+            // set by ADC quantization / conducted-comb downstream of the gain.
+            // At 0 dB the wanted signal sits AT that floor (a controlled sweep on
+            // the continuous 118.050 AWOS carrier measured audio SNR ~1 dB at
+            // 0 dB, jumping to ~10-12 dB by 6-12 dB and plateauing to 42 dB), so
+            // ~12 dB is the minimum that lifts voice clear of quantization. At
+            // 12 dB (with the external LNA) the wideband ADC does not clip (0 %,
+            // ~7 dB headroom). The external LNA still matters for SFDR (it sets a
+            // low system NF and lets the internal stage -- the dominant comb/
+            // noise generator -- run lower), but it does NOT substitute for the
+            // ~12 dB internal gain needed to clear quantization. On a BARE front
+            // end (no external LNA) raise gain_db toward the 48 dB clipping knee.
             // See firmware/diagnostics/ and SPUR-INVESTIGATION.md.
-            gain_db: 0.0,
+            gain_db: 12.0,
             agc: Some("manual".to_string()),
             channels_hz: vec![
                 118_050_000.0,
