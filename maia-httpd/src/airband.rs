@@ -75,58 +75,32 @@ pub struct AirbandConfig {
 
 impl Default for AirbandConfig {
     fn default() -> AirbandConfig {
+        // The operational channel plan + gain live in an external config file
+        // (firmware/airband.json on the Pluto's SD card, loaded via
+        // `--airband-config /mnt/sdcard/airband.json`). This built-in default is
+        // a deliberately MINIMAL FALLBACK, used only when that file is absent
+        // (e.g. the SD card is missing, unformatted, or unmounted): a single
+        // channel -- 118.050 MHz S50 AWOS, an always-on carrier -- at 0 dB gain.
         AirbandConfig {
             // Capture window from hdl/capture_window.py: center 123.438 MHz,
-            // Fs ~= 14 MHz comfortably covers the channel list below (the
-            // 133.65 MHz "nice to have" is outside this window and omitted).
+            // Fs ~= 14 MHz (the rate the channelizer was built for).
             center_hz: 123_438_000,
             samp_rate: 14_000_000,
             rf_bandwidth: None,
-            // Airband voice is weak and intermittent, so use fixed manual gain
-            // (the AD9361 AGC modes settle on wideband power and starve weak
-            // narrowband channels: ch0 peak ~5x lower than fixed max). Default
-            // 12 dB, tuned for an external LNA ahead of the Pluto. The receiver
-            // is INTERNAL-noise-limited, not antenna/thermal-limited: the ch11
-            // audio floor is identical with the antenna or a 50 ohm load (within
-            // 0.4 dB), and rises only ~1 dB per +6 dB of gain -- so the floor is
-            // set by ADC quantization / conducted-comb downstream of the gain.
-            // At 0 dB the wanted signal sits AT that floor (a controlled sweep on
-            // the continuous 118.050 AWOS carrier measured audio SNR ~1 dB at
-            // 0 dB, jumping to ~10-12 dB by 6-12 dB and plateauing to 42 dB), so
-            // ~12 dB is the minimum that lifts voice clear of quantization. At
-            // 12 dB (with the external LNA) the wideband ADC does not clip (0 %,
-            // ~7 dB headroom). The external LNA still matters for SFDR (it sets a
-            // low system NF and lets the internal stage -- the dominant comb/
-            // noise generator -- run lower), but it does NOT substitute for the
-            // ~12 dB internal gain needed to clear quantization. On a BARE front
-            // end (no external LNA) raise gain_db toward the 48 dB clipping knee.
-            // See firmware/diagnostics/ and SPUR-INVESTIGATION.md.
-            gain_db: 12.0,
+            // 0 dB is intentional for the fallback. The receiver is
+            // INTERNAL-noise-limited; at 0 dB a weak airband carrier sits AT the
+            // ADC quantization floor (a controlled sweep on the continuous
+            // 118.050 AWOS carrier measured audio SNR ~1 dB at 0 dB, rising to
+            // ~10-12 dB by 6-12 dB), so this fallback is near-silent BY DESIGN:
+            // hearing only a faint AWOS (and just one channel) is the obvious cue
+            // that the SD channel plan did not load. The real operating gain
+            // (~12 dB with an external LNA; toward the 48 dB clipping knee on a
+            // bare front end) is set in the SD config -- see firmware/airband.json
+            // and SPUR-INVESTIGATION.md.
+            gain_db: 0.0,
             agc: Some("manual".to_string()),
-            channels_hz: vec![
-                118_050_000.0,
-                119_200_000.0,
-                119_900_000.0,
-                120_100_000.0,
-                120_400_000.0,
-                120_950_000.0,
-                121_500_000.0,
-                121_600_000.0,
-                121_700_000.0,
-                122_275_000.0,
-                122_950_000.0,
-                122_975_000.0,
-                123_900_000.0,
-                124_700_000.0,
-                125_600_000.0,
-                125_900_000.0,
-                126_250_000.0,
-                126_500_000.0,
-                126_875_000.0,
-                127_100_000.0,
-                128_500_000.0,
-            ],
-            channel_labels: None,
+            channels_hz: vec![118_050_000.0],
+            channel_labels: Some(vec!["S50 AWOS".to_string()]),
             poll_ms: 20,
         }
     }
