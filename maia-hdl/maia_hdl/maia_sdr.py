@@ -37,11 +37,16 @@ from receiver_top import ReceiverTop  # noqa: E402
 _version = '0.6.2'
 
 # Airband receiver deployment configuration (see hdl/realtime_budget.py:
-# Fs=16 MHz, chans_per_lane=3, lane_decim=160, 63-tap cleanup FIR -> 7 lanes;
+# Fs=16 MHz, chans_per_lane=3, lane_decim=160, 63-tap cleanup FIR -> 6 lanes;
 # duties lane=0.77 / fir=0.33 / am=0.77 at the fixed 62.5 MHz sync clock). The
 # cleanup-FIR coefficients are precomputed from
 # design_cic_compensation(160, 3, 63, 0.164, 0.2625) and embedded so the bitstream
 # build needs no scipy.
+#
+# 18 channels over 6 lanes of 3: at Fs=16 MHz a lane can carry at most 3 channels
+# (62.5/16 ~= 3.9 PL cycles/input sample), and 7 lanes (21 ch) overflow the
+# XC7Z010 LUTs (18234 > 17600 in Vivado), so the plan is capped at 18 ch / 6 lanes
+# (the same lane count as the proven 14 MHz build).
 #
 # A 16 MHz capture (re-centered ~126.4 MHz) widens the window to ~+/-8 MHz so the
 # 133.65 MHz channel fits alongside the existing plan. The channel rate is
@@ -58,7 +63,7 @@ _version = '0.6.2'
 # @6 kHz; a host de-droop biquad flattens the residual). Lowering audio_decim is
 # throughput-free (the AM back-end runs at the channel rate regardless). The host
 # audio rate MUST match (20000 sps).
-_AIRBAND_N_CHANNELS = 21
+_AIRBAND_N_CHANNELS = 18
 _AIRBAND_CHANS_PER_LANE = 3
 _AIRBAND_LANE_DECIM = 160
 _AIRBAND_AUDIO_DECIM = 5

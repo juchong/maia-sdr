@@ -45,7 +45,7 @@ function $(id) { return document.getElementById(id); }
 // ---- application state -----------------------------------------------------
 
 const radio = { centerHz: 126.4e6, spanHz: 16e6, source: "AD9361" };
-const caps = { maxChannels: 21, sampRate: 16e6, sampRateLocked: true };
+const caps = { maxChannels: 18, sampRate: 16e6, sampRateLocked: true };
 
 // Editable working copy of the configuration.
 let plan = {
@@ -850,8 +850,8 @@ async function restart() {
 // ---- presets / import / export ---------------------------------------------
 
 const DEFAULT_PLAN = [
-  119.2, 119.9, 120.1, 120.4, 120.95, 121.5, 121.6, 121.7, 122.275, 122.95,
-  122.975, 123.9, 124.7, 125.6, 125.9, 126.25, 126.5, 126.875, 127.75, 126.95, 133.65,
+  119.2, 119.9, 120.1, 120.4, 120.95, 121.5, 121.6, 121.7, 122.275,
+  122.975, 123.9, 124.7, 125.6, 125.9, 126.25, 126.5, 126.875, 133.65,
 ];
 
 function loadDefaultPlan() {

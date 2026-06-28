@@ -33,7 +33,7 @@ pub const FRAME_BYTES: usize = 8;
 
 /// Number of channels instantiated in the FPGA receiver (`maia_hdl`
 /// `_AIRBAND_N_CHANNELS`).
-pub const N_CHANNELS: usize = 21;
+pub const N_CHANNELS: usize = 18;
 
 /// NCO tuning-word width in the FPGA receiver (`maia_hdl` `_AIRBAND_NCO_WIDTH`).
 const NCO_WIDTH: u32 = 24;
