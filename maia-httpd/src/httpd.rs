@@ -23,6 +23,7 @@ mod airband;
 mod api;
 mod ddc;
 mod geolocation;
+mod health;
 mod iqengine;
 mod recording;
 mod spectrometer;
@@ -87,6 +88,7 @@ impl Server {
                 "/api/airband",
                 get(airband::get_airband).patch(airband::patch_airband),
             )
+            .route("/api/health", get(health::get_health))
             .route(
                 "/api/ddc/config",
                 get(ddc::get_ddc_config)

@@ -17,7 +17,10 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use tokio::sync::broadcast;
+use tokio::{
+    sync::broadcast,
+    time::{Duration, Instant, sleep},
+};
 
 /// maia-httpd application.
 ///
@@ -119,12 +122,27 @@ impl App {
             airband,
         } = self;
         // The airband receiver is optional and must never bring down the rest of
-        // maia-httpd: when disabled, or after it returns/errors, this future
-        // pends forever so it does not terminate the select.
+        // maia-httpd. When disabled this future pends forever; when enabled it
+        // supervises the receiver in-process, restarting it with capped
+        // exponential backoff if it fails (e.g. a detected DMA stall) so the
+        // data path self-heals without killing the web UI / spectrometer.
         let airband = async move {
             if let Some(a) = airband {
-                if let Err(e) = a.run().await {
-                    tracing::error!("airband receiver failed (continuing without it): {e:#}");
+                let mut backoff = Duration::from_secs(1);
+                loop {
+                    let started = Instant::now();
+                    match a.run().await {
+                        Ok(()) => tracing::warn!("airband receiver exited cleanly; restarting"),
+                        Err(e) => tracing::error!("airband receiver failed: {e:#}; restarting"),
+                    }
+                    // A run that stayed up a while was healthy: reset the backoff
+                    // so a later transient failure recovers quickly.
+                    if started.elapsed() >= Duration::from_secs(60) {
+                        backoff = Duration::from_secs(1);
+                    }
+                    tracing::info!("airband receiver restarting in {backoff:?}");
+                    sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
                 }
             }
             std::future::pending::<Result<()>>().await

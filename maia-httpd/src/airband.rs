@@ -25,11 +25,21 @@ use tokio::{
     io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
     sync::broadcast,
-    time::{Duration, sleep},
+    time::{Duration, Instant, sleep},
 };
 
 /// Size in bytes of one framed audio record (`maia_hdl` `AudioFramer`).
 pub const FRAME_BYTES: usize = 8;
+
+/// The FPGA writes the audio ring continuously (silence still produces samples),
+/// so a write pointer that stops advancing for this long means the DMA/FPGA has
+/// stalled. The reader fails loudly so the supervisor restarts the data path
+/// instead of streaming a frozen buffer forever.
+const DMA_STALL_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Sustained FPGA overflow (the host reader cannot keep up draining the ring)
+/// for this long is escalated from a one-shot warning to a hard failure.
+const OVERFLOW_ESCALATE: Duration = Duration::from_secs(15);
 
 /// Number of channels instantiated in the FPGA receiver (`maia_hdl`
 /// `_AIRBAND_N_CHANNELS`).
@@ -164,9 +174,11 @@ impl Airband {
 
     /// Configures the front-end and DSP, then streams framed audio forever.
     ///
-    /// Only returns on error (e.g. failure to open the DMA buffer or bind the
-    /// TCP listener), so that [`crate::app::App::run`] can treat it as fatal.
-    pub async fn run(self) -> Result<()> {
+    /// Only returns on error (e.g. failure to open the DMA buffer, bind the TCP
+    /// listener, or a detected DMA stall / sustained overflow). Takes `&self` so
+    /// [`crate::app::App::run`] can re-invoke it to restart the data path after a
+    /// failure (each call re-configures the front-end and re-binds the socket).
+    pub async fn run(&self) -> Result<()> {
         self.configure().await.context("airband configuration failed")?;
 
         let buffer = crate::rxbuffer::RxBuffer::new("maia-sdr-airband")
@@ -278,19 +290,47 @@ impl Airband {
         let write_buffer = |core: &crate::fpga::IpCore| (core.airband_next_address() / buf_sz) % num;
         let mut read_buf = write_buffer(&self.state.ip_core().lock().unwrap());
         let mut last_overflow = false;
+        let mut overflow_since: Option<Instant> = None;
+        let mut prev_write_buf = read_buf;
+        let mut last_write_change = Instant::now();
 
         loop {
             sleep(interval).await;
 
-            let write_buf = {
+            let (write_buf, overflow) = {
                 let core = self.state.ip_core().lock().unwrap();
-                let of = core.airband_overflow();
-                if of && !last_overflow {
-                    tracing::warn!("airband FPGA overflow: audio samples were dropped");
-                }
-                last_overflow = of;
-                write_buffer(&core)
+                (write_buffer(&core), core.airband_overflow())
             };
+
+            // Overflow: warn once on the edge, escalate to a hard failure if it
+            // persists (the reader is not keeping up -> restart the data path).
+            if overflow && !last_overflow {
+                tracing::warn!("airband FPGA overflow: audio samples were dropped");
+            }
+            last_overflow = overflow;
+            if overflow {
+                let since = *overflow_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= OVERFLOW_ESCALATE {
+                    anyhow::bail!(
+                        "airband FPGA overflow sustained for {OVERFLOW_ESCALATE:?}; \
+                         host reader is not draining the ring"
+                    );
+                }
+            } else {
+                overflow_since = None;
+            }
+
+            // DMA-stall watchdog: a write pointer that has not advanced for
+            // DMA_STALL_TIMEOUT means the FPGA/DMA stopped producing samples.
+            if write_buf != prev_write_buf {
+                prev_write_buf = write_buf;
+                last_write_change = Instant::now();
+            } else if last_write_change.elapsed() >= DMA_STALL_TIMEOUT {
+                anyhow::bail!(
+                    "airband DMA stall: FPGA write pointer stuck at buffer {write_buf} \
+                     for {DMA_STALL_TIMEOUT:?}"
+                );
+            }
 
             // Consume whole buffers that are at least two buffers behind the one
             // being written. Keeping a >= 2-buffer gap guarantees the buffer has
