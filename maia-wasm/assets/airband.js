@@ -27,10 +27,16 @@ const GAIN_MAX_DB = 77;
 // single touchpad/touchscreen flick cannot zoom wildly.
 const ZOOM_WHEEL_K = 0.0015;
 
-// Known fixed spurs (Hz). 120.000 MHz is the 3rd harmonic of the Pluto 40 MHz
-// reference; it shows up as a steady birdie regardless of tuning/gain.
+// Known fixed (absolute, internally-generated) spur teeth (Hz), all confirmed on a
+// 50 ohm load (see SPUR-INVESTIGATION.md). At the 16 MHz build the dominant tooth is
+// the 8th harmonic of the ADC sample clock (8 x 16 = 128.000), which lands clear of
+// every channel; 125.004 (Gigabit-Ethernet PHY clock) and 120.000 (40 MHz reference
+// 3rd harmonic) are fixed regardless of Fs. They show as steady birdies independent
+// of tuning/gain.
 const KNOWN_SPURS = [
   { hz: 120_000_000, label: "120.000 (ref 3x)" },
+  { hz: 125_004_000, label: "125.004 (GbE clk)" },
+  { hz: 128_000_000, label: "128.000 (Fs 8x)" },
 ];
 
 const els = {};
@@ -38,13 +44,13 @@ function $(id) { return document.getElementById(id); }
 
 // ---- application state -----------------------------------------------------
 
-const radio = { centerHz: 123.438e6, spanHz: 14e6, source: "AD9361" };
-const caps = { maxChannels: 21, sampRate: 14e6, sampRateLocked: true };
+const radio = { centerHz: 126.4e6, spanHz: 16e6, source: "AD9361" };
+const caps = { maxChannels: 21, sampRate: 16e6, sampRateLocked: true };
 
 // Editable working copy of the configuration.
 let plan = {
-  centerHz: 123_438_000,
-  sampRate: 14_000_000,
+  centerHz: 126_400_000,
+  sampRate: 16_000_000,
   rfBandwidth: null,
   gainDb: 71,
   agc: "manual",
@@ -71,7 +77,7 @@ const WF_FLOOR_BELOW_DB = 32;  // colorMin = floor - this
 const WF_FLOOR_ABOVE_DB = 18;  // colorMax = floor + this
 
 // view (zoom) state in Hz
-const view = { centerHz: 123.438e6, spanHz: 14e6 };
+const view = { centerHz: 126.4e6, spanHz: 16e6 };
 
 // ---- formatting helpers ----------------------------------------------------
 
@@ -844,8 +850,8 @@ async function restart() {
 // ---- presets / import / export ---------------------------------------------
 
 const DEFAULT_PLAN = [
-  118.05, 119.2, 119.9, 120.1, 120.4, 120.95, 121.5, 121.6, 121.7, 122.275,
-  122.95, 122.975, 123.9, 124.7, 125.6, 125.9, 126.25, 126.5, 126.875, 127.1, 128.5,
+  119.2, 119.9, 120.1, 120.4, 120.95, 121.5, 121.6, 121.7, 122.275, 122.95,
+  122.975, 123.9, 124.7, 125.6, 125.9, 126.25, 126.5, 126.875, 127.75, 126.95, 133.65,
 ];
 
 function loadDefaultPlan() {

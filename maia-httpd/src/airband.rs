@@ -47,7 +47,8 @@ const BROADCAST_DEPTH: usize = 256;
 /// Deserialized from the optional JSON config file; falls back to
 /// [`AirbandConfig::default`] when absent. `samp_rate` MUST match the sample
 /// rate assumed when computing the channelizer (audio rate =
-/// `samp_rate / lane_decim / audio_decim` = `samp_rate / 128 / 7`).
+/// `samp_rate / lane_decim / audio_decim` = `samp_rate / 160 / 5` = 20000 sps at
+/// the 16 MHz build).
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct AirbandConfig {
@@ -82,10 +83,13 @@ impl Default for AirbandConfig {
         // (e.g. the SD card is missing, unformatted, or unmounted): a single
         // channel -- 118.050 MHz S50 AWOS, an always-on carrier -- at 0 dB gain.
         AirbandConfig {
-            // Capture window from hdl/capture_window.py: center 123.438 MHz,
-            // Fs ~= 14 MHz (the rate the channelizer was built for).
+            // samp_rate MUST match the rate the channelizer was built for (16 MHz
+            // -> 20000 sps audio). The fallback LO (123.438 MHz) is chosen to keep
+            // the 118.050 indicator comfortably inside +/- Fs/2; the OPERATIONAL
+            // capture (SD airband.json) re-centers to 126.4 MHz to admit 133.65 MHz
+            // (see hdl/capture_window.py).
             center_hz: 123_438_000,
-            samp_rate: 14_000_000,
+            samp_rate: 16_000_000,
             rf_bandwidth: None,
             // 0 dB is intentional for the fallback. The receiver is
             // INTERNAL-noise-limited; at 0 dB a weak airband carrier sits AT the
@@ -178,7 +182,7 @@ impl Airband {
             "airband framed-audio stream listening on tcp://{} ({} channels, audio {:.1} sps)",
             self.listen,
             N_CHANNELS,
-            self.config.samp_rate as f64 / 128.0 / 7.0,
+            self.config.samp_rate as f64 / 160.0 / 5.0,
         );
 
         let accept_tx = tx.clone();

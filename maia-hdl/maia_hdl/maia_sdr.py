@@ -37,24 +37,30 @@ from receiver_top import ReceiverTop  # noqa: E402
 _version = '0.6.2'
 
 # Airband receiver deployment configuration (see hdl/realtime_budget.py:
-# chans_per_lane=4, lane_decim=128, 63-tap cleanup FIR -> 6 lanes). The cleanup-FIR
-# coefficients are precomputed from design_cic_compensation(128, 3, 63, 0.15, 0.24)
-# and embedded so the bitstream build needs no scipy.
+# Fs=16 MHz, chans_per_lane=3, lane_decim=160, 63-tap cleanup FIR -> 7 lanes;
+# duties lane=0.77 / fir=0.33 / am=0.77 at the fixed 62.5 MHz sync clock). The
+# cleanup-FIR coefficients are precomputed from
+# design_cic_compensation(160, 3, 63, 0.164, 0.2625) and embedded so the bitstream
+# build needs no scipy.
+#
+# A 16 MHz capture (re-centered ~126.4 MHz) widens the window to ~+/-8 MHz so the
+# 133.65 MHz channel fits alongside the existing plan. The channel rate is
+# Fs / lane_decim = 16e6 / 160 = 100000 Hz.
 #
 # The cleanup FIR doubles as the channel-select filter, set to the full AM voice
-# bandwidth (~+/-8 kHz at the 109375 Hz channel rate: flat through ~6 kHz, -1.6 dB
-# @ 8 kHz, -102 dB at the 25 kHz adjacent channel). Tap count is unchanged (63), so
+# bandwidth (~+/-8 kHz at the 100000 Hz channel rate: flat through ~6 kHz, -1.1 dB
+# @ 8 kHz, ~-95 dB at the 25 kHz adjacent channel). Tap count is unchanged (63), so
 # the folded FIR's duty/BRAM/DSP cost - and the proven place-and-route/timing - are
 # identical regardless of the passband width.
 #
-# audio_decim=5 -> 21875 sps audio (109375/5), Nyquist 10.9 kHz, so the order-4
-# audio CIC passes the widened voice with little droop (-1.3 dB @3.4 kHz, -4.2 dB
+# audio_decim=5 -> 20000 sps audio (100000/5), Nyquist 10 kHz, so the order-4
+# audio CIC passes the widened voice with little droop (-1.6 dB @3.4 kHz, -5.1 dB
 # @6 kHz; a host de-droop biquad flattens the residual). Lowering audio_decim is
 # throughput-free (the AM back-end runs at the channel rate regardless). The host
-# audio rate MUST match (21875 sps).
+# audio rate MUST match (20000 sps).
 _AIRBAND_N_CHANNELS = 21
-_AIRBAND_CHANS_PER_LANE = 4
-_AIRBAND_LANE_DECIM = 128
+_AIRBAND_CHANS_PER_LANE = 3
+_AIRBAND_LANE_DECIM = 160
 _AIRBAND_AUDIO_DECIM = 5
 _AIRBAND_CIC_STAGES = 4
 _AIRBAND_DCBLOCK_K = 10
@@ -63,11 +69,11 @@ _AIRBAND_STAGES = 3
 _AIRBAND_SAMPLE_W = 24
 _AIRBAND_FIR_OUT_SHIFT = 17
 _AIRBAND_FIR_COEFFS = [
-    0, 0, -1, -1, 2, 9, 22, 33, 31, -1, -76, -182, -280, -294, -145, 209, 722,
-    1223, 1440, 1087, -4, -1731, -3640, -4956, -4772, -2334, 2637, 9738, 17866,
-    25442, 30821, 32767, 30821, 25442, 17866, 9738, 2637, -2334, -4772, -4956,
-    -3640, -1731, -4, 1087, 1440, 1223, 722, 209, -145, -294, -280, -182, -76,
-    -1, 31, 33, 22, 9, 2, -1, -1, 0, 0]
+    0, 0, 0, -1, -3, -4, 0, 14, 40, 62, 56, -11, -147, -314, -415, -323, 55, 685,
+    1349, 1669, 1246, -124, -2229, -4349, -5376, -4164, 2, 6999, 15709, 24242,
+    30480, 32767, 30480, 24242, 15709, 6999, 2, -4164, -5376, -4349, -2229, -124,
+    1246, 1669, 1349, 685, 55, -323, -415, -314, -147, -11, 56, 62, 40, 14, 0, -4,
+    -3, -1, 0, 0, 0]
 
 
 class MaiaSDR(Elaboratable):
