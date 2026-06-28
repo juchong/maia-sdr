@@ -225,13 +225,22 @@ ad_ip_parameter adc_q_slice CONFIG.DOUT_WIDTH 12
 ad_ip_parameter adc_q_slice CONFIG.DIN_FROM 11
 
 # Maia SDR clocking
-
+#
+# clk_out1 = "sync" (channelizer), clk_out2 = 2x, clk_out3 = 3x, locked 1:2:3
+# (the IP's common_edge logic requires the integer ratio). The airband
+# channelizer consumes one ADC sample every chans_per_lane+1 = 4 sync cycles
+# (cpl=3). The CDC delivers a sample every floor(Fsync/Fs) cycles, so to never
+# drop we need floor(Fsync/Fs) >= 4, i.e. Fsync >= 4*Fs = 64 MHz at Fs=16 MHz.
+# The original 62.5 MHz (ratio 62.5/16 = 3.906, min gap 3) dropped the ~9.4% of
+# samples that arrived 3 cycles apart -> 18.1 ksps instead of 20 ksps. Raising
+# the MMCM multiplier 11.25 -> 11.75 gives VCO 1175 MHz (< 1200 MHz -1 limit) ->
+# sync 65.278 / 130.556 / 195.833 MHz (ratio 4.08, min gap 4 -> 0 drops).
 create_bd_cell -type ip -vlnv xilinx.com:ip:clk_wiz:6.0 maia_sdr_clk
 set_property -dict [list CONFIG.USE_PHASE_ALIGNMENT {false} CONFIG.ENABLE_CLOCK_MONITOR {false} CONFIG.PRIM_SOURCE {Global_buffer} \
                         CONFIG.CLKOUT2_USED {true} CONFIG.CLKOUT3_USED {true} CONFIG.NUM_OUT_CLKS {3} \
-                        CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {62.500} CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {125.000} \
-                        CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {187.5} \
-                        CONFIG.PRIMITIVE {MMCM} CONFIG.MMCM_DIVCLK_DIVIDE {1} CONFIG.MMCM_CLKFBOUT_MULT_F {11.250} \
+                        CONFIG.CLKOUT1_REQUESTED_OUT_FREQ {65.278} CONFIG.CLKOUT2_REQUESTED_OUT_FREQ {130.556} \
+                        CONFIG.CLKOUT3_REQUESTED_OUT_FREQ {195.833} \
+                        CONFIG.PRIMITIVE {MMCM} CONFIG.MMCM_DIVCLK_DIVIDE {1} CONFIG.MMCM_CLKFBOUT_MULT_F {11.750} \
                         CONFIG.MMCM_CLKOUT0_DIVIDE_F {18.000} CONFIG.MMCM_CLKOUT1_DIVIDE {9} \
                         CONFIG.MMCM_CLKOUT3_DIVIDE {6} \
                         CONFIG.CLKOUT1_JITTER {133.663} CONFIG.CLKOUT1_PHASE_ERROR {91.100} \
