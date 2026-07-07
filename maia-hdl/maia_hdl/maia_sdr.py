@@ -40,7 +40,7 @@ _version = '0.6.2'
 # Fs=16 MHz, chans_per_lane=3, lane_decim=160, 63-tap cleanup FIR -> 6 lanes;
 # duties lane=0.77 / fir=0.33 / am=0.77 at the fixed 62.5 MHz sync clock). The
 # cleanup-FIR coefficients are precomputed from
-# design_cic_compensation(160, 3, 63, 0.164, 0.2625) and embedded so the bitstream
+# design_cic_compensation(160, 3, 63, 0.10, 0.16) and embedded so the bitstream
 # build needs no scipy.
 #
 # 18 channels over 6 lanes of 3: at Fs=16 MHz a lane can carry at most 3 channels
@@ -52,11 +52,15 @@ _version = '0.6.2'
 # 133.65 MHz channel fits alongside the existing plan. The channel rate is
 # Fs / lane_decim = 16e6 / 160 = 100000 Hz.
 #
-# The cleanup FIR doubles as the channel-select filter, set to the full AM voice
-# bandwidth (~+/-8 kHz at the 100000 Hz channel rate: flat through ~6 kHz, -1.1 dB
-# @ 8 kHz, ~-95 dB at the 25 kHz adjacent channel). Tap count is unchanged (63), so
+# The cleanup FIR doubles as the channel-select filter, narrowed to the AM voice
+# bandwidth (~+/-5 kHz at the 100000 Hz channel rate: flat through ~4 kHz, -0.9 dB
+# @ 4 kHz, -5.8 dB @ 6 kHz, -19 dB @ 8 kHz, ~-109 dB at the 25 kHz adjacent
+# channel). This trims the wideband IQ before envelope detection so out-of-voice
+# noise is not folded down into the audio (the +-8 kHz original passed a broadband
+# HF shelf that the demod reproduced as harshness). Tap count is unchanged (63), so
 # the folded FIR's duty/BRAM/DSP cost - and the proven place-and-route/timing - are
-# identical regardless of the passband width.
+# identical regardless of the passband width; only out_shift changes (the narrower
+# taps sum higher, so renormalize by 2**18 instead of 2**17).
 #
 # audio_decim=5 -> 20000 sps audio (100000/5), Nyquist 10 kHz, so the order-4
 # audio CIC passes the widened voice with little droop (-1.6 dB @3.4 kHz, -5.1 dB
@@ -72,13 +76,13 @@ _AIRBAND_DCBLOCK_K = 10
 _AIRBAND_NCO_WIDTH = 24
 _AIRBAND_STAGES = 3
 _AIRBAND_SAMPLE_W = 24
-_AIRBAND_FIR_OUT_SHIFT = 17
+_AIRBAND_FIR_OUT_SHIFT = 18
 _AIRBAND_FIR_COEFFS = [
-    0, 0, 0, -1, -3, -4, 0, 14, 40, 62, 56, -11, -147, -314, -415, -323, 55, 685,
-    1349, 1669, 1246, -124, -2229, -4349, -5376, -4164, 2, 6999, 15709, 24242,
-    30480, 32767, 30480, 24242, 15709, 6999, 2, -4164, -5376, -4349, -2229, -124,
-    1246, 1669, 1349, 685, 55, -323, -415, -314, -147, -11, 56, 62, 40, 14, 0, -4,
-    -3, -1, 0, 0, 0]
+    -1, -4, -10, -18, -24, -23, -5, 39, 117, 228, 356, 470, 519, 442, 180, -306,
+    -1013, -1877, -2760, -3452, -3694, -3211, -1763, 799, 4487, 9145, 14445, 19915,
+    24998, 29131, 31829, 32767, 31829, 29131, 24998, 19915, 14445, 9145, 4487, 799,
+    -1763, -3211, -3694, -3452, -2760, -1877, -1013, -306, 180, 442, 519, 470, 356,
+    228, 117, 39, -5, -23, -24, -18, -10, -4, -1]
 
 
 class MaiaSDR(Elaboratable):
